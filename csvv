@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Steven Ward
+# SPDX-License-Identifier: MPL-2.0
+
+'''
+Filter, sort, and select the columns of a CSV file.
+'''
+
+__author__ = 'Steven Ward'
+__license__ = 'MPL-2.0'
+__version__ = '2026-10-16'
+
+import argparse
+import contextlib
+import csv
+import dataclasses
+import io
+import itertools
+import signal
+import sys
+from collections.abc import Iterable, Iterator
+from typing import TextIO
+
+# Restore default SIGPIPE handling so broken pipes terminate silently, as in C.
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+type Row = list[str]
+type Rows = Iterator[Row]
+
+# The csv module's default of 131072 bytes rejects larger fields.
+# sys.maxsize would overflow a C long on Windows.
+FIELD_SIZE_LIMIT = 2**31 - 1
+
+RAGGED_MODES = ('error', 'pad', 'truncate')
+
+
+class DataError(Exception):
+    '''A problem with the input data, as opposed to the command line.'''
+
+
+@dataclasses.dataclass(frozen=True)
+class Header:
+    '''Column names from the first record.'''
+    names: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class Record:
+    '''A row with its position in the input, for error messages.'''
+    number: int
+    line: int
+    row: Row
+
+
+def separator(s: str) -> str:
+    '''Convert s to a one-character field separator, where "\\t" means a tab.'''
+    if s == r'\t':
+        s = '\t'
+    if len(s) != 1:
+        raise argparse.ArgumentTypeError(r'must be one character, or \t for a tab')
+    if s in '"\r\n':
+        raise argparse.ArgumentTypeError('may not be a quote or a line break')
+    return s
+
+
+def read_records(stream: TextIO, delimiter: str, source: str) -> Iterator[Record]:
+    '''Yield each record of stream, numbered from 1, with the line it starts on.
+Blank lines are skipped and not counted, since the csv writer never produces
+one for a record that holds a value.'''
+
+    # strict=True turns a stray quote into an error.  Without it, '"a" b' would
+    # silently read as 'a b', and an unclosed quote would swallow the rest of
+    # the input into one field.
+    reader = csv.reader(stream, delimiter=delimiter, strict=True)
+    number = 0
+    start = 1
+
+    while True:
+        try:
+            row = next(reader)
+        except StopIteration:
+            return
+        except csv.Error as e:
+            raise DataError(f'{source}: record {number + 1}, line {start}: {e}') from e
+
+        if row:
+            number += 1
+            yield Record(number, start, row)
+
+        # line_num counts physical lines, so a record holding a quoted line
+        # break moves it on by more than one.
+        start = reader.line_num + 1
+
+
+def fit_rows(records: Iterable[Record], width: int, ragged: str, source: str) -> Rows:
+    '''Yield each row, after making it width fields long as ragged allows.'''
+
+    for record in records:
+        row = record.row
+        if len(row) == width:
+            yield row
+        elif len(row) < width and ragged == 'pad':
+            yield row + [''] * (width - len(row))
+        elif len(row) > width and ragged == 'truncate':
+            yield row[:width]
+        else:
+            raise DataError(f'{source}: record {record.number}, line {record.line}: '
+                            f'expected {width} fields, found {len(row)}')
+
+
+def read(stream: TextIO, delimiter: str, has_header: bool, ragged: str,
+         source: str) -> tuple[Header | None, Rows]:
+    '''Read the header, if has_header, and the rows from stream.
+The first record sets the width that every other row must match.'''
+
+    records = read_records(stream, delimiter, source)
+    first = next(records, None)
+
+    if first is None:
+        return None, iter(())
+
+    width = len(first.row)
+
+    if has_header:
+        return Header(tuple(first.row)), fit_rows(records, width, ragged, source)
+
+    return None, fit_rows(itertools.chain((first,), records), width, ragged, source)
+
+
+def write(stream: TextIO, delimiter: str, header: Header | None, rows: Rows) -> None:
+    '''Write the header, if any, and the rows to stream as CSV.'''
+
+    # The default line terminator is '\r\n', which upsets diff and wc -l.
+    writer = csv.writer(stream, delimiter=delimiter, lineterminator='\n')
+
+    if header is not None:
+        writer.writerow(header.names)
+
+    writer.writerows(rows)
+
+
+def configure_stdio() -> None:
+    '''Set up stdin and stdout the way the csv module needs them.'''
+
+    # newline='' keeps a quoted line break intact and stops '\r\n' from
+    # doubling on Windows.  utf-8-sig drops a byte-order mark, which would
+    # otherwise join the first column name.  surrogateescape passes invalid
+    # UTF-8 through unchanged.
+    if isinstance(sys.stdin, io.TextIOWrapper):
+        sys.stdin.reconfigure(encoding='utf-8-sig', errors='surrogateescape', newline='')
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding='utf-8', errors='surrogateescape', newline='')
+
+
+# pylint: disable=missing-function-docstring
+def main(argv: list[str] | None = None) -> int | None:
+
+    description_lines = (
+            'Filter, sort, and select the columns of a CSV file.',
+            'Read FILE, or stdin when FILE is absent or "-", and write CSV to stdout.',
+            )
+
+    epilog_lines = (
+            r'CHAR is one character, or \t for a tab.',
+            'A tab separator still honors CSV quoting.',
+            '',
+            'With -H, the header is written first.',
+            'Pipe the output to "tail -n +2" to drop it,',
+            'unless a quoted header field spans lines.',
+            '',
+            'Every record must have as many fields as the first, unless --ragged says otherwise.',
+            '',
+            'Examples:',
+            "  %(prog)s -F ';' in.csv              convert semicolon-separated input to CSV",
+            r"  %(prog)s -o '\t' in.csv | column -t -s $'\t'",
+            '                                    show the input as an aligned table',
+            )
+
+    version_lines = (f'%(prog)s {__version__}',
+                    f'License: {__license__}',
+                    f'Written by {__author__}')
+
+    parser = argparse.ArgumentParser(
+            usage='%(prog)s [OPTION]... [FILE]',
+            description='\n'.join(description_lines),
+            epilog='\n'.join(epilog_lines),
+            formatter_class=argparse.RawTextHelpFormatter)
+
+    parser.add_argument('-V', '--version', action='version', version='\n'.join(version_lines))
+
+    parser.add_argument('-H', '--header', action='store_true',
+            help='the first record holds column names')
+
+    parser.add_argument('-F', '--delimiter', metavar='CHAR', type=separator, default=',',
+            help='the input field separator (default ",")')
+
+    parser.add_argument('-o', '--output-delimiter', metavar='CHAR', type=separator,
+            help='the output field separator (default: the input separator)')
+
+    parser.add_argument('--ragged', metavar='MODE', choices=RAGGED_MODES, default='error',
+            help='handle a record whose length differs from the first record:\n'
+                 'error (the default), pad with empty fields, or truncate')
+
+    parser.add_argument('FILE', nargs='?', default='-',
+            help='the CSV file to read')
+
+    args = parser.parse_args(argv)
+
+    csv.field_size_limit(FIELD_SIZE_LIMIT)
+    configure_stdio()
+
+    out_delimiter = args.delimiter if args.output_delimiter is None else args.output_delimiter
+
+    try:
+        with contextlib.ExitStack() as stack:
+            if args.FILE == '-':
+                stream: TextIO = sys.stdin
+                source = 'stdin'
+            else:
+                stream = stack.enter_context(open(args.FILE, encoding='utf-8-sig',
+                        errors='surrogateescape', newline=''))
+                source = args.FILE
+
+            header, rows = read(stream, args.delimiter, args.header, args.ragged, source)
+            write(sys.stdout, out_delimiter, header, rows)
+
+    except OSError as e:
+        # A failed write to stdout has no file name.
+        where = '' if e.filename is None else f'{e.filename}: '
+        print(f'{parser.prog}: {where}{e.strerror}', file=sys.stderr)
+        return 1
+
+    except DataError as e:
+        sys.stdout.flush()
+        print(f'{parser.prog}: {e}', file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
