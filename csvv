@@ -27,6 +27,9 @@ signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 type Row = list[str]
 type Rows = Iterator[Row]
 
+# A 1-based position, or a slice of positions whose stop is inclusive.
+type Choice = int | slice
+
 # The csv module's default of 131072 bytes rejects larger fields.
 # sys.maxsize would overflow a C long on Windows.
 FIELD_SIZE_LIMIT = 2**31 - 1
@@ -42,6 +45,26 @@ class DataError(Exception):
 class Header:
     '''Column names from the first record.'''
     names: tuple[str, ...]
+
+    def lookup(self, name: str) -> list[int]:
+        '''Return the 0-based position of every column named name.'''
+        return [i for i, n in enumerate(self.names) if n == name]
+
+
+@dataclasses.dataclass(frozen=True)
+class Column:
+    '''One column item, as the user wrote it.'''
+    text: str
+
+    @property
+    def forced(self) -> bool:
+        '''Whether a "#" prefix forces the item to be read as a position or a slice.'''
+        return self.text.startswith('#')
+
+    @property
+    def choice_text(self) -> str:
+        '''The text to read as a position or a slice.'''
+        return self.text.removeprefix('#')
 
 
 @dataclasses.dataclass(frozen=True)
@@ -61,6 +84,127 @@ def separator(s: str) -> str:
     if s in '"\r\n':
         raise argparse.ArgumentTypeError('may not be a quote or a line break')
     return s
+
+
+def parse_choice(s: str) -> Choice | None:
+    '''Convert s to a 1-based position, or to a slice whose stop is inclusive.
+Return None if s is not written as either.  Raise ValueError for a 0, which is
+never a valid position, endpoint, or step.'''
+
+    parts = s.split(':')
+
+    if len(parts) > 3:
+        return None
+
+    try:
+        numbers = [None if not p else int(p) for p in parts]
+    except ValueError:
+        return None
+
+    if len(numbers) == 1:
+        position = numbers[0]
+        if position is None:
+            return None
+        if position == 0:
+            raise ValueError('columns are numbered from 1, so 0 is not a position')
+        return position
+
+    if 0 in numbers:
+        raise ValueError('columns are numbered from 1, so a slice may not use 0')
+
+    return slice(*numbers)
+
+
+def pick(choice: Choice, width: int) -> list[int]:
+    '''Return the 0-based positions that choice picks from width columns.
+A position out of range picks nothing, and a slice is clamped to the columns
+that exist, as in Python.'''
+
+    def index(n: int) -> int:
+        return n - 1 if n > 0 else width + n
+
+    if isinstance(choice, int):
+        i = index(choice)
+        return [i] if 0 <= i < width else []
+
+    step = 1 if choice.step is None else choice.step
+    first = None if choice.start is None else index(choice.start)
+    last = None if choice.stop is None else index(choice.stop)
+
+    if step > 0:
+        low = 0 if first is None else max(first, 0)
+        high = width - 1 if last is None else min(last, width - 1)
+        return list(range(low, high + 1, step))
+
+    high = width - 1 if first is None else min(first, width - 1)
+    low = 0 if last is None else max(last, 0)
+    return list(range(high, low - 1, step))
+
+
+def resolve(columns: Iterable[Column], header: Header | None, width: int) -> list[int]:
+    '''Return the 0-based positions that columns name, in order.
+With a header, an item that exactly matches a column name refers to that column,
+even when it could also be read as a position.'''
+
+    result: list[int] = []
+
+    for column in columns:
+
+        if header is not None and not column.forced:
+            matches = header.lookup(column.text)
+            if len(matches) > 1:
+                where = ', '.join(str(i + 1) for i in matches)
+                raise DataError(f'column name {column.text!r} is ambiguous, '
+                                f'since columns {where} all have it')
+            if matches:
+                result.extend(matches)
+                continue
+
+        try:
+            choice = parse_choice(column.choice_text)
+        except ValueError as e:
+            raise DataError(f'{column.text!r}: {e}') from e
+
+        if choice is None:
+            raise DataError(f'no column named {column.text!r}')
+
+        result.extend(pick(choice, width))
+
+    return result
+
+
+def column_list(s: str) -> list[Column]:
+    '''Split s at each comma into column items, checking what does not depend on a header.'''
+
+    columns = [Column(item) for item in s.split(',')]
+
+    for column in columns:
+        if not column.text:
+            raise argparse.ArgumentTypeError(f'{s!r} has an empty item')
+        if column.forced:
+            try:
+                choice = parse_choice(column.choice_text)
+            except ValueError as e:
+                raise argparse.ArgumentTypeError(f'{column.text!r}: {e}') from e
+            if choice is None:
+                raise argparse.ArgumentTypeError(
+                        f'{column.text!r}: "#" must be followed by a position or a slice')
+
+    return columns
+
+
+def check_without_header(columns: Iterable[Column]) -> str | None:
+    '''Return a problem with columns when there is no header to find names in.'''
+
+    for column in columns:
+        try:
+            choice = parse_choice(column.choice_text)
+        except ValueError as e:
+            return f'{column.text!r}: {e}'
+        if choice is None:
+            return f'{column.text!r} is a column name, which needs -H'
+
+    return None
 
 
 def read_records(stream: TextIO, delimiter: str, source: str) -> Iterator[Record]:
@@ -127,6 +271,29 @@ The first record sets the width that every other row must match.'''
     return None, fit_rows(itertools.chain((first,), records), width, ragged, source)
 
 
+def select(header: Header | None, rows: Rows,
+           columns: Iterable[Column]) -> tuple[Header | None, Rows]:
+    '''Keep only the named columns, in the order named.
+Every row already has the width of the first record, so the positions are
+worked out once and serve every row.'''
+
+    if header is not None:
+        width = len(header.names)
+    else:
+        first = next(rows, None)
+        if first is None:
+            return None, iter(())
+        width = len(first)
+        rows = itertools.chain((first,), rows)
+
+    positions = resolve(columns, header, width)
+
+    if header is not None:
+        header = Header(tuple(header.names[i] for i in positions))
+
+    return header, ([row[i] for i in positions] for row in rows)
+
+
 def write(stream: TextIO, delimiter: str, header: Header | None, rows: Rows) -> None:
     '''Write the header, if any, and the rows to stream as CSV.'''
 
@@ -152,8 +319,8 @@ def configure_stdio() -> None:
         sys.stdout.reconfigure(encoding='utf-8', errors='surrogateescape', newline='')
 
 
-# pylint: disable=missing-function-docstring
-def main(argv: list[str] | None = None) -> int | None:
+def make_parser() -> argparse.ArgumentParser:
+    '''Build the command-line parser.'''
 
     description_lines = (
             'Filter, sort, and select the columns of a CSV file.',
@@ -170,10 +337,22 @@ def main(argv: list[str] | None = None) -> int | None:
             '',
             'Every record must have as many fields as the first, unless --ragged says otherwise.',
             '',
+            'LIST is a comma-separated list of columns.',
+            'Each column is a position, a slice, or a name from the header.',
+            'Positions start at 1, and negative ones count from the end.',
+            'A slice is START:STOP:STEP, as in Python, except that STOP is included.',
+            'With -H, an exact column name wins, and a "#" prefix forces a position, as in #3.',
+            'A position out of range is ignored.',
+            'Use --select=LIST if LIST starts with "-".',
+            '',
             'Examples:',
             "  %(prog)s -F ';' in.csv              convert semicolon-separated input to CSV",
             r"  %(prog)s -o '\t' in.csv | column -t -s $'\t'",
-            '                                    show the input as an aligned table',
+            '                                  show the input as an aligned table',
+            '  %(prog)s --select 2:4 in.csv        columns 2 through 4',
+            '  %(prog)s --select=-1 in.csv         the last column',
+            '  %(prog)s --select ::-1 in.csv       every column, in reverse order',
+            '  %(prog)s -H --select name,1 in.csv  the column named "name", then the first',
             )
 
     version_lines = (f'%(prog)s {__version__}',
@@ -201,10 +380,25 @@ def main(argv: list[str] | None = None) -> int | None:
             help='handle a record whose length differs from the first record:\n'
                  'error (the default), pad with empty fields, or truncate')
 
+    parser.add_argument('--select', metavar='LIST', type=column_list, action='append',
+            default=[], help='output only the columns in LIST, in that order (repeatable)')
+
     parser.add_argument('FILE', nargs='?', default='-',
             help='the CSV file to read')
 
+    return parser
+
+
+# pylint: disable=missing-function-docstring
+def main(argv: list[str] | None = None) -> int | None:
+
+    parser = make_parser()
     args = parser.parse_args(argv)
+
+    selected = [column for columns in args.select for column in columns]
+
+    if not args.header and (problem := check_without_header(selected)):
+        parser.error(f'argument --select: {problem}')
 
     csv.field_size_limit(FIELD_SIZE_LIMIT)
     configure_stdio()
@@ -222,6 +416,8 @@ def main(argv: list[str] | None = None) -> int | None:
                 source = args.FILE
 
             header, rows = read(stream, args.delimiter, args.header, args.ragged, source)
+            if selected:
+                header, rows = select(header, rows, selected)
             write(sys.stdout, out_delimiter, header, rows)
 
     except OSError as e:
