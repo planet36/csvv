@@ -4,7 +4,7 @@
 MAN = csvv.1
 MAN_NAME = filter and sort the rows of a CSV file, and select its columns
 
-all: $(MAN)
+all: test
 
 man: $(MAN)
 
