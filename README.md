@@ -135,7 +135,7 @@ md5sum big.iso        0.351  0.349   10
 sha256sum big.iso     0.412  0.405   10
 ```
 
-A field that holds a tab, a quote, or a line break is still quoted, and `column` shows the quotes.
+A field that holds a quote is still quoted, and `column` shows the quotes.  A field that holds a tab or a line break misaligns the table, because `column` splits the field at the tab and starts a new row at the line break.  The CSV is still correct, but the table is not.
 
 ### Debugging
 
