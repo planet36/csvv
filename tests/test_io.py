@@ -185,8 +185,10 @@ def test_bad_ragged_mode_is_a_usage_error(run: Run) -> None:
 def test_version(run: Run) -> None:
     result = run('-V')
     assert result.returncode == 0
-    assert result.stdout.startswith(b'csvv 20')
-    assert b'MPL-2.0' in result.stdout
+    lines = result.stdout.decode().splitlines()
+    assert lines[0].startswith('csvv 20')
+    assert lines[1:] == ['Copyright Steven Ward', 'License: MPL-2.0', '',
+                         'Written by Steven Ward']
 
 
 def test_help(run: Run) -> None:

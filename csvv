@@ -701,7 +701,8 @@ def make_parser() -> argparse.ArgumentParser:
     '''Build the command-line parser.'''
 
     description_lines = (
-            'Filter, sort, and select the columns of a CSV file.',
+            'Filter and sort the rows of a CSV file, and select its columns.',
+            'csvv filters first, then sorts, then selects, whatever order the options are in.',
             'Read FILE, or stdin when FILE is absent or "-", and write CSV to stdout.',
             )
 
@@ -712,15 +713,13 @@ def make_parser() -> argparse.ArgumentParser:
             'With -H, the header is written first.',
             'Pipe the output to "tail -n +2" to drop it,',
             'unless a quoted header field spans lines.',
-            '',
             'Every record must have as many fields as the first, unless --ragged says otherwise.',
             '',
-            'LIST is a comma-separated list of columns.',
-            'Each column is a position, a slice, or a name from the header.',
+            'A column is named by its position, by a slice, or with -H by its name.',
             'Positions start at 1, and negative ones count from the end.',
             'A slice is START:STOP:STEP, as in Python, except that STOP is included.',
-            'With -H, an exact column name wins, and a "#" prefix forces a position, as in #3.',
-            'A position out of range is ignored.',
+            'With -H, an exact column name wins over a position.',
+            'A "#" prefix forces a position, as in #3.',
             '',
             'EXPR is COL OP VALUE, where COL is one column, and OP is one of',
             '==, !=, <, <=, >, >=, ~, or !~.',
@@ -737,7 +736,9 @@ def make_parser() -> argparse.ArgumentParser:
             'Text compares by code point, like LC_ALL=C sort.',
             'The sort is stable, and the first --sort takes priority.',
             '',
-            'csvv filters first, then sorts, then selects, whatever order the options are in.',
+            'LIST is a comma-separated list of columns.',
+            'A position out of range in LIST is ignored.',
+            '',
             'Use -e=EXPR, --sort=KEY, or --select=LIST if the value starts with "-".',
             '',
             'Examples:',
@@ -754,8 +755,13 @@ def make_parser() -> argparse.ArgumentParser:
             '  %(prog)s --sort 2:3:nr in.csv         rows by columns 2 and 3, largest first',
             )
 
+    # help2man reads this layout.  It puts the Copyright paragraph in a
+    # COPYRIGHT section and the "Written by" one in AUTHOR, and a license line
+    # with no Copyright line before it would land at the end of EXAMPLES.
     version_lines = (f'%(prog)s {__version__}',
+                    f'Copyright {__author__}',
                     f'License: {__license__}',
+                    '',
                     f'Written by {__author__}')
 
     parser = argparse.ArgumentParser(
@@ -765,9 +771,6 @@ def make_parser() -> argparse.ArgumentParser:
             formatter_class=argparse.RawTextHelpFormatter)
 
     parser.add_argument('-V', '--version', action='version', version='\n'.join(version_lines))
-
-    parser.add_argument('--debug', action='store_true',
-            help='print diagnostics and warnings to stderr')
 
     parser.add_argument('-H', '--header', action='store_true',
             help='the first record holds column names')
@@ -790,6 +793,9 @@ def make_parser() -> argparse.ArgumentParser:
 
     parser.add_argument('--select', metavar='LIST', type=column_list, action='append',
             default=[], help='output only the columns in LIST, in that order (repeatable)')
+
+    parser.add_argument('--debug', action='store_true',
+            help='print diagnostics and warnings to stderr')
 
     parser.add_argument('FILE', nargs='?', default='-',
             help='the CSV file to read')
