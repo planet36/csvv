@@ -168,9 +168,16 @@ int() is tried first, so that long integers compare exactly, where float()
 alone would make 9007199254740993 equal 9007199254740992.  NaN is not a number,
 since it compares false with everything and would break a sort.
 
+Only ASCII text can be a number.  int() and float() also read the digits of
+other scripts, so without that check a cell holding 12 in Arabic-Indic digits
+would equal 12.
+
 An integer longer than 4300 digits, Python's default limit for int(), falls
 through to float() and becomes infinite, so two such integers compare equal.
 Lifting the limit would let one huge field take quadratic time to parse.'''
+
+    if not s.isascii():
+        return None
 
     try:
         return int(s)

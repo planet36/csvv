@@ -30,7 +30,7 @@ def test_numbers(csvv: types.ModuleType, text: str, expected: float) -> None:
 
 
 @pytest.mark.parametrize('text', ['', ' ', 'nan', 'NaN', '-nan', '1,234', '0x1F', '1.2.3',
-                                  'five', '1 2', '½'])
+                                  'five', '1 2', '½', '١٢', '１２', '1٢', '\u00a05'])
 def test_not_numbers(csvv: types.ModuleType, text: str) -> None:
     assert csvv.to_number(text) is None
 
