@@ -313,13 +313,9 @@ even when it could also be read as a position.'''
     if header is not None and not column.forced:
         matches = header.lookup(column.text)
         if len(matches) > 1:
-            numbers = [str(i + 1) for i in matches]
-            if len(numbers) == 2:
-                where = f'{numbers[0]} and {numbers[1]} both'
-            else:
-                where = f'{", ".join(numbers[:-1])}, and {numbers[-1]} all'
-            raise DataError(f'column name {column.text!r} is ambiguous, '
-                            f'since columns {where} have it')
+            numbers = join_and([str(i + 1) for i in matches])
+            raise DataError(f'column name {column.text!r} is ambiguous, since columns '
+                            f'{numbers} {"both" if len(matches) == 2 else "all"} have it')
         if matches:
             return Resolved(column, matches, by_name=True, is_slice=False)
 
@@ -354,6 +350,13 @@ def resolve_some(column: Column, header: Header | None, width: int) -> Resolved:
 def count(n: int, noun: str) -> str:
     '''Return n with noun, made plural unless n is 1.'''
     return f'{n} {noun}' if n == 1 else f'{n} {noun}s'
+
+
+def join_and(words: list[str]) -> str:
+    '''Join words as "a", "a and b", or "a, b, and c".'''
+    if len(words) <= 2:
+        return ' and '.join(words)
+    return f'{", ".join(words[:-1])}, and {words[-1]}'
 
 
 def out_of_range(column: Column, width: int) -> DataError:
@@ -739,9 +742,12 @@ def select(header: Header | None, width: int, rows: Rows, items: Iterable[Select
            debug: Debug) -> tuple[Header | None, Rows]:
     '''Keep only the named columns, in the order named.
 A NamePattern names every column whose name it is found in, in header order,
-and naming none is an error, as an unknown name is.'''
+and naming none is an error, as an unknown name is.  A position out of range is
+ignored, but ignoring every item is an error, since a row of no fields can only
+be written as a blank line.'''
 
     positions: list[int] = []
+    ignored: list[str] = []
 
     for column in items:
         if isinstance(column, NamePattern):
@@ -760,7 +766,13 @@ and naming none is an error, as an unknown name is.'''
         else:
             debug.warn(f'{label} was ignored, since the input has '
                        f'{count(width, "column")}')
+            ignored.append(repr(column.text))
         positions.extend(resolved.positions)
+
+    if not positions:
+        raise DataError(f'--select chose no columns, since {join_and(ignored)} '
+                        f'{"is" if len(ignored) == 1 else "are"} out of range '
+                        f'and the input has {count(width, "column")}')
 
     if header is not None:
         header = Header(tuple(header.names[i] for i in positions))
@@ -839,7 +851,8 @@ def make_parser() -> argparse.ArgumentParser:
             'The sort is stable, and the first --sort takes priority.',
             '',
             'LIST is a comma-separated list of columns.',
-            'A position out of range in LIST is ignored.',
+            'A position out of range in LIST is ignored,',
+            'but it is an error when --select chooses no column at all.',
             'REGEX selects every column whose name it is found in, in header order.',
             'It needs -H, and it is an error when it matches no column name.',
             '--select and --select-regex join in the order given.',

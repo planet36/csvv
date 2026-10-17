@@ -151,6 +151,21 @@ def test_unknown_name_is_a_data_error(run: Run) -> None:
     assert result.stderr == b"csvv: no column named 'nope'\n"
 
 
+@pytest.mark.parametrize(('args', 'message'), [
+    pytest.param(('--select', '5'), b"'5' is out of range", id='one item'),
+    pytest.param(('--select', '5,7:9'), b"'5' and '7:9' are out of range", id='two items'),
+    pytest.param(('--select', '5', '--select', '#-9,6'),
+                 b"'5', '#-9', and '6' are out of range", id='three items'),
+    pytest.param(('-H', '--select', '5'), b"'5' is out of range", id='with a header'),
+])
+def test_selecting_no_columns_is_a_data_error(run: Run, args: tuple[str, ...],
+                                              message: bytes) -> None:
+    result = run(*args, stdin=b'a,b\n1,2\n')
+    assert (result.returncode, result.stdout) == (1, b'')
+    assert result.stderr == (b'csvv: --select chose no columns, since ' + message +
+                             b' and the input has 2 columns\n')
+
+
 def test_ambiguous_name_is_a_data_error(run: Run) -> None:
     result = run('-H', '--select', 'x', stdin=b'x,x\n1,2\n')
     assert result.returncode == 1
