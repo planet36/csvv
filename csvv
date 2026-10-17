@@ -11,7 +11,7 @@ Filter and sort the rows of a CSV file, and select its columns.
 
 __author__ = 'Steven Ward'
 __license__ = 'MPL-2.0'
-__version__ = '2026-10-16'
+__version__ = '2026-10-17'
 
 import argparse
 import contextlib
