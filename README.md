@@ -82,7 +82,7 @@ Write `--select=-1` rather than `--select -1` when the value starts with `-`, an
 
 `-e` takes `COL OP VALUE`, where OP is one of `==`, `!=`, `<`, `<=`, `>`, `>=`, `~`, or `!~`.  A row must match every `-e`.
 
-- **`~` and `!~`** test whether the regex VALUE is found anywhere in the cell.
+- **`~` and `!~`** test whether the regex VALUE is found anywhere in the cell.  Start the regex with `(?i)` to ignore case, as in `name~(?i)^b`.
 - **The other operators compare numbers when VALUE is a number**, and text otherwise.  So `err==99` matches `99`, `99.0`, and `099`.  For an exact text match, use a regex, as in `id~^007$`.
 - **In a numeric test, a cell that is not a number fails** every operator but `!=`.
 

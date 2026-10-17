@@ -72,6 +72,7 @@ def test_condition_parsing(csvv: types.ModuleType, text: str, column: str, op: s
     ('>', 'Z', ['a', 'é']),
     ('~', '^a.c$', ['abc', 'a-c']),
     ('~', 'b', ['abc', 'b']),
+    ('~', '(?i)^a', ['abc', 'ABC']),
     ('!~', '^a', ['ba', '', 'A']),
     ('==', '', ['']),
     ('~', '', ['', 'x']),
@@ -90,6 +91,7 @@ def test_matches(csvv: types.ModuleType, op: str, value: str, cells: list[str]) 
     ('==', 'abc', ['ABC', ' abc']),
     ('<', 'm', ['m', 'z', 'é']),
     ('~', '^a', ['ba', '']),
+    ('~', '(?i)^a', ['ba']),
     ('!~', 'b', ['abc']),
 ])
 def test_does_not_match(csvv: types.ModuleType, op: str, value: str,

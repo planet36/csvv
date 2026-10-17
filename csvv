@@ -704,6 +704,7 @@ def make_parser() -> argparse.ArgumentParser:
             'EXPR is COL OP VALUE, where COL is one column, and OP is one of',
             '==, !=, <, <=, >, >=, ~, or !~.',
             '~ and !~ test whether the regex VALUE is found in the cell.',
+            'Start the regex with (?i) to ignore case, as in name~(?i)^b.',
             'The other operators compare numbers when VALUE is a number, and text otherwise.',
             'In a numeric test, a cell that is not a number fails every operator but !=.',
             'A row must match every -e.',
