@@ -492,6 +492,11 @@ one for a record that holds a value.'''
             return
         except csv.Error as e:
             raise DataError(f'{source}: record {number + 1}, line {start}: {e}') from e
+        except OSError as e:
+            # A failed read has no file name, and main() takes an OSError
+            # without one to be a failed write to stdout.
+            raise DataError(f'{source}: record {number + 1}, line {start}: '
+                            f'{e.strerror or e}') from e
 
         if row:
             number += 1

@@ -4,12 +4,15 @@
 # pylint: disable=missing-function-docstring
 
 import csv
+import errno
 import io
+import itertools
 import os
 import signal
 import subprocess
 import sys
 import types
+from collections.abc import Iterator
 
 import pytest
 
@@ -101,6 +104,28 @@ def test_missing_file(run: Run, tmp_path) -> None:
     result = run(str(path))
     assert result.returncode == 1
     assert result.stderr == f'csvv: {path}: No such file or directory\n'.encode()
+
+
+def test_failed_read_names_the_source(csvv: types.ModuleType) -> None:
+    def lines() -> Iterator[str]:
+        yield 'a,b\n'
+        yield '1,2\n'
+        raise OSError(errno.EIO, os.strerror(errno.EIO))
+
+    records = csvv.read_records(lines(), ',', 'in.csv')
+    assert [r.row for r in itertools.islice(records, 2)] == [['a', 'b'], ['1', '2']]
+    with pytest.raises(csvv.DataError) as e:
+        next(records)
+    assert str(e.value) == 'in.csv: record 3, line 3: Input/output error'
+
+
+@pytest.mark.skipif(not os.path.exists('/proc/self/mem'), reason='needs /proc/self/mem')
+def test_failed_read_is_not_a_failed_write(run: Run) -> None:
+    # Reading /proc/self/mem from offset 0 fails with EIO, since that
+    # address is never mapped.
+    result = run('/proc/self/mem')
+    assert result.returncode == 1
+    assert result.stderr == b'csvv: /proc/self/mem: record 1, line 1: Input/output error\n'
 
 
 def test_ragged_short_row_is_an_error(run: Run) -> None:
