@@ -22,7 +22,13 @@ lint:
 	mypy --ignore-missing-imports csvv
 
 clean:
-	@$(RM) --verbose -- $(MAN)
+	@$(RM) --recursive -- \
+		$(MAN) \
+		__pycache__ \
+		tests/__pycache__ \
+		.mypy_cache \
+		.pytest_cache \
+		.ruff_cache
 
 # https://www.gnu.org/software/make/manual/make.html#Phony-Targets
 .PHONY: all man check test lint clean
