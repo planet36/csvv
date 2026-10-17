@@ -80,11 +80,13 @@ Write `--select=-1` rather than `--select -1` when the value starts with `-`, an
 
 ### Filtering
 
-`-e` takes `COL OP VALUE`, where OP is one of `==`, `!=`, `<`, `<=`, `>`, `>=`, `~`, or `!~`.  A row must match every `-e`.
+`-e` takes `COL OP VALUE`, where COL is a column or a slice of columns, and OP is one of `==`, `!=`, `<`, `<=`, `>`, `>=`, `~`, or `!~`.  A row must match every `-e`.
 
 - **`~` and `!~`** test whether the regex VALUE is found anywhere in the cell.  Start the regex with `(?i)` to ignore case, as in `name~(?i)^b`.
 - **The other operators compare numbers when VALUE is a number**, and text otherwise.  So `err==99` matches `99`, `99.0`, and `099`.  For an exact text match, use a regex, as in `id~^007$`.
-- **In a numeric test, a cell that is not a number fails** every operator but `!=`.
+- **In a numeric test, a cell that is not a number** is never equal, less, or greater, so it passes only `!=`.
+- **With a slice, a row passes when any of its columns does.**  So `-e '::~error'` keeps the rows with `error` in any column.  Unlike `grep`, it respects CSV quoting and never tests the header.  For "all of the columns", give one `-e` per column.
+- **`!=` and `!~` pass a row only when none of its columns has `==` or `~`**, so they stay the exact opposites of `==` and `~`.  `-e '::!~error'` keeps the rows with no `error` anywhere, like `grep -v`.
 
 The expression is parsed by a small fixed grammar, never evaluated as code.
 

@@ -166,7 +166,6 @@ def test_filter_on_empty_input(run: Run) -> None:
     ('==1', b'has no column'),
     ('a~(', b'invalid regex'),
     ('#x<1', b'"#" must be followed by a position'),
-    ('#1:2<1', b'is a slice'),
     ('#0<1', b'numbered from 1'),
 ])
 def test_bad_filter_is_a_usage_error(run: Run, expr: str, message: bytes) -> None:
@@ -177,7 +176,6 @@ def test_bad_filter_is_a_usage_error(run: Run, expr: str, message: bytes) -> Non
 
 @pytest.mark.parametrize(('expr', 'message'), [
     ('name==a', b"'name' is a column name, which needs -H"),
-    ('1:2<1', b'is a slice'),
     ('0<1', b'numbered from 1'),
 ])
 def test_bad_filter_without_header_is_a_usage_error(run: Run, expr: str,
@@ -189,9 +187,9 @@ def test_bad_filter_without_header_is_a_usage_error(run: Run, expr: str,
 
 @pytest.mark.parametrize(('expr', 'message'), [
     ('nope<1', b"no column named 'nope'"),
-    ('1:2<1', b'is a slice'),
     ('#9<1', b'out of range, since the input has 3 columns'),
     ('-9<1', b'out of range'),
+    ('5:<1', b'out of range'),
 ])
 def test_bad_filter_column_is_a_data_error(run: Run, expr: str, message: bytes) -> None:
     result = run('-H', '-e', expr, stdin=DATA)
@@ -203,3 +201,57 @@ def test_out_of_range_without_header(run: Run) -> None:
     result = run('-e', '9<1', stdin=b'a,b\n')
     assert result.returncode == 1
     assert b'out of range' in result.stderr
+
+
+# Columns 2 and 3 hold a row with one positive cell, a row of zeros, a row
+# whose positive cell is in the other column, and a row of non-numbers.
+WIDE = b'k,a,b\np,1,0\nq,0,0\nr,0,7\ns,x,y\n'
+
+
+def kept(run: Run, *args: str, data: bytes = WIDE) -> list[str]:
+    '''Filter data and return the first cell of each row written.'''
+    result = run(*args, stdin=data)
+    assert result.returncode == 0, result.stderr
+    return [line.split(',')[0] for line in result.stdout.decode().splitlines()]
+
+
+@pytest.mark.parametrize('expr', ['2:3>0', '#2:3>0', '3:2:-1>0', '2:>0', '-2:>0'])
+def test_slice_passes_when_any_column_does(run: Run, expr: str) -> None:
+    assert kept(run, '-H', f'-e={expr}') == ['k', 'p', 'r']
+
+
+def test_slice_without_header(run: Run) -> None:
+    # The header line is a row here, and its cells are not numbers.
+    assert kept(run, '-e', '2:3>0') == ['p', 'r']
+    assert kept(run, '-e', '::~^[kq]$') == ['k', 'q']
+
+
+def test_whole_row_regex(run: Run) -> None:
+    assert kept(run, '-H', '-e', '::~7') == ['k', 'r']
+    assert kept(run, '-H', '-e', '::~^k$') == ['k']
+
+
+@pytest.mark.parametrize(('expr', 'rows'), [
+    ('2:3!=0', ['s']),
+    ('2:3==0', ['p', 'q', 'r']),
+    ('::!~0', ['s']),
+    ('::~0', ['p', 'q', 'r']),
+])
+def test_negated_slice_passes_when_no_column_matches(run: Run, expr: str,
+                                                     rows: list[str]) -> None:
+    assert kept(run, '-H', '-e', expr) == ['k', *rows]
+
+
+@pytest.mark.parametrize(('positive', 'negated'), [
+    ('2:3==0', '2:3!=0'),
+    ('::~0', '::!~0'),
+    ('2:3==x', '2:3!=x'),
+])
+def test_negated_slice_is_the_exact_opposite(run: Run, positive: str, negated: str) -> None:
+    passed = kept(run, '-e', positive)
+    failed = kept(run, '-e', negated)
+    assert sorted(passed + failed) == ['k', 'p', 'q', 'r', 's']
+
+
+def test_slice_combines_with_other_filters(run: Run) -> None:
+    assert kept(run, '-H', '-e', '2:3>0', '-e', 'k!~p') == ['k', 'r']

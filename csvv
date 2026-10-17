@@ -53,6 +53,9 @@ COMPARISONS: dict[str, Callable[[Any, Any], bool]] = {
 
 REGEX_OPERATORS = ('~', '!~')
 
+# Each negated operator and the operator it is the exact opposite of.
+NEGATIONS = {'!=': '==', '!~': '~'}
+
 # Only ASCII digits, as for numbers.  The group makes re.split() keep the runs.
 DIGIT_RUN = re.compile('([0-9]+)')
 
@@ -113,19 +116,36 @@ class Condition:
     number: Number | None
     regex: re.Pattern[str] | None
 
-    def matches(self, cell: str) -> bool:
-        '''Whether cell passes this test.'''
+    @property
+    def negated(self) -> bool:
+        '''Whether the operator is != or !~.'''
+        return self.op in NEGATIONS
+
+    def holds(self, cell: str) -> bool:
+        '''Whether cell passes the test, with == in place of != and ~ in place of !~.
+In a numeric test, a cell that is not a number is never equal, less, or greater.'''
 
         if self.regex is not None:
-            return (self.regex.search(cell) is None) == (self.op == '!~')
+            return self.regex.search(cell) is not None
+
+        op = NEGATIONS.get(self.op, self.op)
 
         if self.number is not None:
             n = to_number(cell)
-            if n is None:
-                return self.op == '!='
-            return COMPARISONS[self.op](n, self.number)
+            return n is not None and COMPARISONS[op](n, self.number)
 
-        return COMPARISONS[self.op](cell, self.value)
+        return COMPARISONS[op](cell, self.value)
+
+    def passes(self, cells: Iterable[str]) -> bool:
+        '''Whether a row passes, given its cells in the columns that COL names.
+A row passes when any of the cells holds.  A negated operator turns that
+around, so != and !~ pass a row only when none of the cells has == or ~, and
+stay the exact opposites of == and ~.'''
+        return any(self.holds(cell) for cell in cells) != self.negated
+
+    def matches(self, cell: str) -> bool:
+        '''Whether one cell passes this test.'''
+        return self.passes((cell,))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -313,17 +333,6 @@ def resolve_some(column: Column, header: Header | None, width: int) -> Resolved:
     return resolved
 
 
-def resolve_one(column: Column, header: Header | None, width: int) -> Resolved:
-    '''Work out the single column that one item names.'''
-
-    resolved = resolve_some(column, header, width)
-
-    if resolved.is_slice:
-        raise DataError(f'{column.text!r} is a slice, where only one column is allowed')
-
-    return resolved
-
-
 def count(n: int, noun: str) -> str:
     '''Return n with noun, made plural unless n is 1.'''
     return f'{n} {noun}' if n == 1 else f'{n} {noun}s'
@@ -335,7 +344,7 @@ def out_of_range(column: Column, width: int) -> DataError:
                      f'since the input has {count(width, "column")}')
 
 
-def check_forced(column: Column, single: bool = False) -> None:
+def check_forced(column: Column) -> None:
     '''Check a "#" item, which needs no header to be understood.'''
 
     if not column.forced:
@@ -349,10 +358,6 @@ def check_forced(column: Column, single: bool = False) -> None:
     if choice is None:
         raise argparse.ArgumentTypeError(
                 f'{column.text!r}: "#" must be followed by a position or a slice')
-
-    if single and isinstance(choice, slice):
-        raise argparse.ArgumentTypeError(
-                f'{column.text!r} is a slice, where only one column is allowed')
 
 
 def column_list(s: str) -> list[Column]:
@@ -386,7 +391,7 @@ def condition(s: str) -> Condition:
     if not column.text:
         raise argparse.ArgumentTypeError(f'{s!r} has no column before {op!r}')
 
-    check_forced(column, single=True)
+    check_forced(column)
 
     if op in REGEX_OPERATORS:
         try:
@@ -423,7 +428,7 @@ letters, such as "a:n", is therefore named by position.'''
     return SortKey(s, column, 'n' in flags, 'v' in flags, 'i' in flags, 'r' in flags)
 
 
-def check_without_header(columns: Iterable[Column], single: bool = False) -> str | None:
+def check_without_header(columns: Iterable[Column]) -> str | None:
     '''Return a problem with columns when there is no header to find names in.'''
 
     for column in columns:
@@ -433,8 +438,6 @@ def check_without_header(columns: Iterable[Column], single: bool = False) -> str
             return f'{column.text!r}: {e}'
         if choice is None:
             return f'{column.text!r} is a column name, which needs -H'
-        if single and isinstance(choice, slice):
-            return f'{column.text!r} is a slice, where only one column is allowed'
 
     return None
 
@@ -594,28 +597,37 @@ names, and warn about them once every row has passed.'''
 
 def keep_matching(header: Header | None, width: int, rows: Rows,
                   conditions: Iterable[Condition], debug: Debug) -> tuple[Header | None, Rows]:
-    '''Keep only the rows that pass every condition.'''
+    '''Keep only the rows that pass every condition.
+A slice passes a row when any of its columns does, as Condition.passes says.'''
 
-    tests: list[tuple[Condition, int]] = []
+    tests: list[tuple[Condition, list[int]]] = []
 
     for c in conditions:
         label = f'-e {c.text!r}'
-        resolved = resolve_one(c.column, header, width)
+        resolved = resolve_some(c.column, header, width)
         debug.check_name(label, resolved)
         mode = ('a regex search' if c.regex is not None else
                 'comparing numbers' if c.number is not None else 'comparing text')
         value = c.value if c.number is not None else repr(c.value)
-        debug.note(f'{label}: {describe(resolved.positions, header)} {c.op} {value}, {mode}')
-        tests.append((c, resolved.positions[0]))
+        where = describe(resolved.positions, header)
+        op = c.op
+        if resolved.is_slice:
+            # "none of columns 2, 3 == 0" reads more plainly than "!=" would.
+            where = f'{"none" if c.negated else "any"} of {where}'
+            op = NEGATIONS.get(op, op)
+        debug.note(f'{label}: {where} {op} {value}, {mode}')
+        tests.append((c, resolved.positions))
 
     # A cell that is not a number is never equal to VALUE, so != passes it.
-    numeric = [(f'-e {c.text!r}', i, c.op == '!=') for c, i in tests if c.number is not None]
+    numeric = [(f'-e {c.text!r}', i, c.op == '!=')
+               for c, positions in tests if c.number is not None for i in positions]
     rows = debug.non_numbers(rows, [(label, i) for label, i, unequal in numeric if unequal],
                              'counted as unequal')
     rows = debug.non_numbers(rows, [(label, i) for label, i, unequal in numeric if not unequal],
                              'failed the comparison')
 
-    return header, (row for row in rows if all(c.matches(row[i]) for c, i in tests))
+    return header, (row for row in rows
+                    if all(c.passes(row[i] for i in positions) for c, positions in tests))
 
 
 def natural_key(cell: str) -> tuple[str | tuple[int, str, str], ...]:
@@ -759,12 +771,14 @@ def make_parser() -> argparse.ArgumentParser:
             'With -H, an exact column name wins over a position.',
             'A "#" prefix forces a position, as in #3.',
             '',
-            'EXPR is COL OP VALUE, where COL is one column, and OP is one of',
-            '==, !=, <, <=, >, >=, ~, or !~.',
+            'EXPR is COL OP VALUE, where COL is a column or a slice of columns,',
+            'and OP is one of ==, !=, <, <=, >, >=, ~, or !~.',
             '~ and !~ test whether the regex VALUE is found in the cell.',
             'Start the regex with (?i) to ignore case, as in name~(?i)^b.',
             'The other operators compare numbers when VALUE is a number, and text otherwise.',
-            'In a numeric test, a cell that is not a number fails every operator but !=.',
+            'In a numeric test, a cell that is not a number is never equal, less, or greater.',
+            'With a slice, a row passes when any of its columns does,',
+            'but != and !~ pass a row only when none of its columns has == or ~.',
             'A row must match every -e.',
             '',
             'KEY is COL[:FLAGS], where COL is a column or a slice of columns.',
@@ -793,6 +807,7 @@ def make_parser() -> argparse.ArgumentParser:
             '  %(prog)s -H --select name,1 in.csv    the column named "name", then the first',
             "  %(prog)s -H -e 'median<0.03' in.csv   rows whose median is below 0.03",
             "  %(prog)s -H -e 'name~^B' in.csv       rows whose name starts with B",
+            "  %(prog)s -e '::~error' in.csv         rows with error in any column",
             '  %(prog)s -H --sort median:n in.csv    rows by increasing median',
             '  %(prog)s -H --sort file:v in.csv      rows by file, with file2 before file10',
             '  %(prog)s --sort 2:3:nr in.csv         rows by columns 2 and 3, largest first',
@@ -896,7 +911,7 @@ def main(argv: list[str] | None = None) -> int | None:
             debug=args.debug)
 
     if not options.header:
-        if problem := check_without_header((c.column for c in options.filter), single=True):
+        if problem := check_without_header(c.column for c in options.filter):
             parser.error(f'argument -e/--filter: {problem}')
         if problem := check_without_header(k.column for k in options.sort):
             parser.error(f'argument --sort: {problem}')

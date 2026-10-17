@@ -38,6 +38,22 @@ def test_filter_notes(run: Run) -> None:
     assert "csvv: -e 'name==beta': column 1 ('name') == 'beta', comparing text" in lines
 
 
+def test_filter_notes_for_a_slice(run: Run) -> None:
+    lines = debug_lines(run, '-H', '-e', '2:3>0', '-e', '::!~x', '-e', 'err!=1')
+    assert ("csvv: -e '2:3>0': any of columns 2 ('err'), 3 ('median') > 0, "
+            'comparing numbers') in lines
+    assert ("csvv: -e '::!~x': none of columns 1 ('name'), 2 ('err'), 3 ('median') ~ 'x', "
+            'a regex search') in lines
+    assert "csvv: -e 'err!=1': column 2 ('err') != 1, comparing numbers" in lines
+
+
+def test_warns_about_non_numbers_in_each_column_of_a_slice(run: Run) -> None:
+    lines = debug_lines(run, '-H', '-e', '2:3>0')
+    warnings = [line for line in lines if 'warning' in line]
+    assert warnings == [("csvv: warning: -e '2:3>0' met 2 cells that are not numbers, "
+                         'which failed the comparison')]
+
+
 def test_sort_notes(run: Run) -> None:
     lines = debug_lines(run, '-H', '--sort', 'median:nr', '--sort', '1:2', '--sort', 'name:v',
                         '--sort', 'name:vir')
