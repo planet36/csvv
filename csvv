@@ -16,10 +16,13 @@ import csv
 import dataclasses
 import io
 import itertools
+import math
+import operator
+import re
 import signal
 import sys
-from collections.abc import Iterable, Iterator
-from typing import TextIO
+from collections.abc import Callable, Iterable, Iterator
+from typing import Any, TextIO
 
 # Restore default SIGPIPE handling so broken pipes terminate silently, as in C.
 signal.signal(signal.SIGPIPE, signal.SIG_DFL)
@@ -30,11 +33,28 @@ type Rows = Iterator[Row]
 # A 1-based position, or a slice of positions whose stop is inclusive.
 type Choice = int | slice
 
+type Number = int | float
+
 # The csv module's default of 131072 bytes rejects larger fields.
 # sys.maxsize would overflow a C long on Windows.
 FIELD_SIZE_LIMIT = 2**31 - 1
 
 RAGGED_MODES = ('error', 'pad', 'truncate')
+
+COMPARISONS: dict[str, Callable[[Any, Any], bool]] = {
+    '==': operator.eq,
+    '!=': operator.ne,
+    '<': operator.lt,
+    '<=': operator.le,
+    '>': operator.gt,
+    '>=': operator.ge,
+}
+
+REGEX_OPERATORS = ('~', '!~')
+
+# Two-character operators come first, so that the longest one wins where
+# several start at the same place.
+OPERATORS = sorted((*COMPARISONS, *REGEX_OPERATORS), key=len, reverse=True)
 
 
 class DataError(Exception):
@@ -68,6 +88,31 @@ class Column:
 
 
 @dataclasses.dataclass(frozen=True)
+class Condition:
+    '''One -e test, COL OP VALUE.'''
+    column: Column
+    op: str
+    value: str
+    # The value as a number, which makes a comparison numeric.
+    number: Number | None
+    regex: re.Pattern[str] | None
+
+    def matches(self, cell: str) -> bool:
+        '''Whether cell passes this test.'''
+
+        if self.regex is not None:
+            return (self.regex.search(cell) is None) == (self.op == '!~')
+
+        if self.number is not None:
+            n = to_number(cell)
+            if n is None:
+                return self.op == '!='
+            return COMPARISONS[self.op](n, self.number)
+
+        return COMPARISONS[self.op](cell, self.value)
+
+
+@dataclasses.dataclass(frozen=True)
 class Record:
     '''A row with its position in the input, for error messages.'''
     number: int
@@ -84,6 +129,25 @@ def separator(s: str) -> str:
     if s in '"\r\n':
         raise argparse.ArgumentTypeError('may not be a quote or a line break')
     return s
+
+
+def to_number(s: str) -> Number | None:
+    '''Convert s to a number, or return None if it is not one.
+int() is tried first, so that long integers compare exactly, where float()
+alone would make 9007199254740993 equal 9007199254740992.  NaN is not a number,
+since it compares false with everything and would break a sort.'''
+
+    try:
+        return int(s)
+    except ValueError:
+        pass
+
+    try:
+        n = float(s)
+    except ValueError:
+        return None
+
+    return None if math.isnan(n) else n
 
 
 def parse_choice(s: str) -> Choice | None:
@@ -173,6 +237,43 @@ even when it could also be read as a position.'''
     return result
 
 
+def resolve_one(column: Column, header: Header | None, width: int) -> int:
+    '''Return the 0-based position of the single column that column names.'''
+
+    positions = resolve((column,), header, width)
+
+    is_name = header is not None and not column.forced and header.lookup(column.text)
+
+    if not is_name and isinstance(parse_choice(column.choice_text), slice):
+        raise DataError(f'{column.text!r} is a slice, where only one column is allowed')
+
+    if not positions:
+        raise DataError(f'column {column.text!r} is out of range, '
+                        f'since there are {width} columns')
+
+    return positions[0]
+
+
+def check_forced(column: Column, single: bool = False) -> None:
+    '''Check a "#" item, which needs no header to be understood.'''
+
+    if not column.forced:
+        return
+
+    try:
+        choice = parse_choice(column.choice_text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f'{column.text!r}: {e}') from e
+
+    if choice is None:
+        raise argparse.ArgumentTypeError(
+                f'{column.text!r}: "#" must be followed by a position or a slice')
+
+    if single and isinstance(choice, slice):
+        raise argparse.ArgumentTypeError(
+                f'{column.text!r} is a slice, where only one column is allowed')
+
+
 def column_list(s: str) -> list[Column]:
     '''Split s at each comma into column items, checking what does not depend on a header.'''
 
@@ -181,19 +282,42 @@ def column_list(s: str) -> list[Column]:
     for column in columns:
         if not column.text:
             raise argparse.ArgumentTypeError(f'{s!r} has an empty item')
-        if column.forced:
-            try:
-                choice = parse_choice(column.choice_text)
-            except ValueError as e:
-                raise argparse.ArgumentTypeError(f'{column.text!r}: {e}') from e
-            if choice is None:
-                raise argparse.ArgumentTypeError(
-                        f'{column.text!r}: "#" must be followed by a position or a slice')
+        check_forced(column)
 
     return columns
 
 
-def check_without_header(columns: Iterable[Column]) -> str | None:
+def condition(s: str) -> Condition:
+    '''Parse s as COL OP VALUE, splitting it at the first operator from the left.'''
+
+    for i in range(len(s)):
+        op = next((op for op in OPERATORS if s.startswith(op, i)), None)
+        if op is not None:
+            break
+    else:
+        raise argparse.ArgumentTypeError(
+                f'{s!r} has no operator, which is one of '
+                f'{", ".join((*COMPARISONS, *REGEX_OPERATORS))}')
+
+    column = Column(s[:i].strip())
+    value = s[i + len(op):].strip()
+
+    if not column.text:
+        raise argparse.ArgumentTypeError(f'{s!r} has no column before {op!r}')
+
+    check_forced(column, single=True)
+
+    if op in REGEX_OPERATORS:
+        try:
+            regex = re.compile(value)
+        except re.error as e:
+            raise argparse.ArgumentTypeError(f'{s!r}: invalid regex: {e}') from e
+        return Condition(column, op, value, None, regex)
+
+    return Condition(column, op, value, to_number(value), None)
+
+
+def check_without_header(columns: Iterable[Column], single: bool = False) -> str | None:
     '''Return a problem with columns when there is no header to find names in.'''
 
     for column in columns:
@@ -203,6 +327,8 @@ def check_without_header(columns: Iterable[Column]) -> str | None:
             return f'{column.text!r}: {e}'
         if choice is None:
             return f'{column.text!r} is a column name, which needs -H'
+        if single and isinstance(choice, slice):
+            return f'{column.text!r} is a slice, where only one column is allowed'
 
     return None
 
@@ -271,20 +397,45 @@ The first record sets the width that every other row must match.'''
     return None, fit_rows(itertools.chain((first,), records), width, ragged, source)
 
 
-def select(header: Header | None, rows: Rows,
-           columns: Iterable[Column]) -> tuple[Header | None, Rows]:
-    '''Keep only the named columns, in the order named.
-Every row already has the width of the first record, so the positions are
-worked out once and serve every row.'''
+def peek_width(header: Header | None, rows: Rows) -> tuple[int | None, Rows]:
+    '''Return the width of the input, and rows with nothing consumed.
+Every row already has the width of the first record, so column positions are
+worked out once from it and serve every row.  The width is None when there is
+neither a header nor a row.'''
 
     if header is not None:
-        width = len(header.names)
-    else:
-        first = next(rows, None)
-        if first is None:
-            return None, iter(())
-        width = len(first)
-        rows = itertools.chain((first,), rows)
+        return len(header.names), rows
+
+    first = next(rows, None)
+
+    if first is None:
+        return None, iter(())
+
+    return len(first), itertools.chain((first,), rows)
+
+
+def keep_matching(header: Header | None, rows: Rows,
+                  conditions: Iterable[Condition]) -> tuple[Header | None, Rows]:
+    '''Keep only the rows that pass every condition.'''
+
+    width, rows = peek_width(header, rows)
+
+    if width is None:
+        return header, rows
+
+    tests = [(c, resolve_one(c.column, header, width)) for c in conditions]
+
+    return header, (row for row in rows if all(c.matches(row[i]) for c, i in tests))
+
+
+def select(header: Header | None, rows: Rows,
+           columns: Iterable[Column]) -> tuple[Header | None, Rows]:
+    '''Keep only the named columns, in the order named.'''
+
+    width, rows = peek_width(header, rows)
+
+    if width is None:
+        return header, rows
 
     positions = resolve(columns, header, width)
 
@@ -343,16 +494,27 @@ def make_parser() -> argparse.ArgumentParser:
             'A slice is START:STOP:STEP, as in Python, except that STOP is included.',
             'With -H, an exact column name wins, and a "#" prefix forces a position, as in #3.',
             'A position out of range is ignored.',
-            'Use --select=LIST if LIST starts with "-".',
+            '',
+            'EXPR is COL OP VALUE, where COL is one column, and OP is one of',
+            '==, !=, <, <=, >, >=, ~, or !~.',
+            '~ and !~ test whether the regex VALUE is found in the cell.',
+            'The other operators compare numbers when VALUE is a number, and text otherwise.',
+            'In a numeric test, a cell that is not a number fails every operator but !=.',
+            'A row must match every -e.',
+            '',
+            'csvv filters first, then selects, whatever order the options are in.',
+            'Use --select=LIST or -e=EXPR if the value starts with "-".',
             '',
             'Examples:',
-            "  %(prog)s -F ';' in.csv              convert semicolon-separated input to CSV",
+            "  %(prog)s -F ';' in.csv                convert semicolon-separated input to CSV",
             r"  %(prog)s -o '\t' in.csv | column -t -s $'\t'",
-            '                                  show the input as an aligned table',
-            '  %(prog)s --select 2:4 in.csv        columns 2 through 4',
-            '  %(prog)s --select=-1 in.csv         the last column',
-            '  %(prog)s --select ::-1 in.csv       every column, in reverse order',
-            '  %(prog)s -H --select name,1 in.csv  the column named "name", then the first',
+            '                                    show the input as an aligned table',
+            '  %(prog)s --select 2:4 in.csv          columns 2 through 4',
+            '  %(prog)s --select=-1 in.csv           the last column',
+            '  %(prog)s --select ::-1 in.csv         every column, in reverse order',
+            '  %(prog)s -H --select name,1 in.csv    the column named "name", then the first',
+            "  %(prog)s -H -e 'median<0.03' in.csv   rows whose median is below 0.03",
+            "  %(prog)s -H -e 'name~^B' in.csv       rows whose name starts with B",
             )
 
     version_lines = (f'%(prog)s {__version__}',
@@ -380,6 +542,9 @@ def make_parser() -> argparse.ArgumentParser:
             help='handle a record whose length differs from the first record:\n'
                  'error (the default), pad with empty fields, or truncate')
 
+    parser.add_argument('-e', '--filter', metavar='EXPR', type=condition, action='append',
+            default=[], help='keep only rows matching EXPR (repeatable)')
+
     parser.add_argument('--select', metavar='LIST', type=column_list, action='append',
             default=[], help='output only the columns in LIST, in that order (repeatable)')
 
@@ -397,8 +562,11 @@ def main(argv: list[str] | None = None) -> int | None:
 
     selected = [column for columns in args.select for column in columns]
 
-    if not args.header and (problem := check_without_header(selected)):
-        parser.error(f'argument --select: {problem}')
+    if not args.header:
+        if problem := check_without_header((c.column for c in args.filter), single=True):
+            parser.error(f'argument -e/--filter: {problem}')
+        if problem := check_without_header(selected):
+            parser.error(f'argument --select: {problem}')
 
     csv.field_size_limit(FIELD_SIZE_LIMIT)
     configure_stdio()
@@ -416,6 +584,8 @@ def main(argv: list[str] | None = None) -> int | None:
                 source = args.FILE
 
             header, rows = read(stream, args.delimiter, args.header, args.ragged, source)
+            if args.filter:
+                header, rows = keep_matching(header, rows, args.filter)
             if selected:
                 header, rows = select(header, rows, selected)
             write(sys.stdout, out_delimiter, header, rows)
