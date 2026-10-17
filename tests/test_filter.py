@@ -188,7 +188,7 @@ def test_bad_filter_without_header_is_a_usage_error(run: Run, expr: str,
 @pytest.mark.parametrize(('expr', 'message'), [
     ('nope<1', b"no column named 'nope'"),
     ('1:2<1', b'is a slice'),
-    ('#9<1', b'out of range, since there are 3 columns'),
+    ('#9<1', b'out of range, since the input has 3 columns'),
     ('-9<1', b'out of range'),
 ])
 def test_bad_filter_column_is_a_data_error(run: Run, expr: str, message: bytes) -> None:

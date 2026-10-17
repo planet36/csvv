@@ -22,7 +22,7 @@ import re
 import signal
 import sys
 from collections.abc import Callable, Iterable, Iterator
-from typing import Any, TextIO
+from typing import Any, Self, TextIO
 
 # Restore default SIGPIPE handling so broken pipes terminate silently, as in C.
 signal.signal(signal.SIGPIPE, signal.SIG_DFL)
@@ -110,6 +110,23 @@ class Condition:
             return COMPARISONS[self.op](n, self.number)
 
         return COMPARISONS[self.op](cell, self.value)
+
+
+@dataclasses.dataclass(frozen=True)
+class SortKey:
+    '''One --sort key, COL[:FLAGS].'''
+    column: Column
+    numeric: bool
+    reverse: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Descending:
+    '''Text that sorts in reverse order.'''
+    text: str
+
+    def __lt__(self, other: Self) -> bool:
+        return self.text > other.text
 
 
 @dataclasses.dataclass(frozen=True)
@@ -248,10 +265,20 @@ def resolve_one(column: Column, header: Header | None, width: int) -> int:
         raise DataError(f'{column.text!r} is a slice, where only one column is allowed')
 
     if not positions:
-        raise DataError(f'column {column.text!r} is out of range, '
-                        f'since there are {width} columns')
+        raise out_of_range(column, width)
 
     return positions[0]
+
+
+def count(n: int, noun: str) -> str:
+    '''Return n with noun, made plural unless n is 1.'''
+    return f'{n} {noun}' if n == 1 else f'{n} {noun}s'
+
+
+def out_of_range(column: Column, width: int) -> DataError:
+    '''Return the error for a column that names no column of the input.'''
+    return DataError(f'column {column.text!r} is out of range, '
+                     f'since the input has {count(width, "column")}')
 
 
 def check_forced(column: Column, single: bool = False) -> None:
@@ -317,6 +344,28 @@ def condition(s: str) -> Condition:
     return Condition(column, op, value, to_number(value), None)
 
 
+def sort_key(s: str) -> SortKey:
+    '''Parse s as COL[:FLAGS].
+FLAGS is the text after the last ":", when that text is made only of the
+letters n and r.  Otherwise the whole of s is the column, so "2:" is the slice
+from column 2 onward, as in --select.  A column whose name ends in such
+letters, such as "a:n", is therefore named by position.'''
+
+    head, colon, flags = s.rpartition(':')
+
+    if colon and flags and set(flags) <= set('nr'):
+        column = Column(head)
+    else:
+        column, flags = Column(s), ''
+
+    if not column.text:
+        raise argparse.ArgumentTypeError(f'{s!r} has no column')
+
+    check_forced(column)
+
+    return SortKey(column, 'n' in flags, 'r' in flags)
+
+
 def check_without_header(columns: Iterable[Column], single: bool = False) -> str | None:
     '''Return a problem with columns when there is no header to find names in.'''
 
@@ -375,7 +424,7 @@ def fit_rows(records: Iterable[Record], width: int, ragged: str, source: str) ->
             yield row[:width]
         else:
             raise DataError(f'{source}: record {record.number}, line {record.line}: '
-                            f'expected {width} fields, found {len(row)}')
+                            f'expected {count(width, "field")}, found {len(row)}')
 
 
 def read(stream: TextIO, delimiter: str, has_header: bool, ragged: str,
@@ -426,6 +475,46 @@ def keep_matching(header: Header | None, rows: Rows,
     tests = [(c, resolve_one(c.column, header, width)) for c in conditions]
 
     return header, (row for row in rows if all(c.matches(row[i]) for c, i in tests))
+
+
+def cell_key(cell: str, numeric: bool, reverse: bool) -> Any:
+    '''Return what to sort cell by.
+In a numeric key, a cell that is not a number sorts after the numbers in both
+directions, and among the others in text order.  The tags 0 and 1 keep a
+number from ever being compared with text.'''
+
+    if numeric:
+        n = to_number(cell)
+        if n is not None:
+            return (0, -n if reverse else n)
+        return (1, Descending(cell) if reverse else cell)
+
+    return Descending(cell) if reverse else cell
+
+
+def sort_rows(header: Header | None, rows: Rows,
+              keys: Iterable[SortKey]) -> tuple[Header | None, Rows]:
+    '''Sort the rows by the keys, the first key taking priority.
+A slice stands for one key per column, all with the same flags.  The sort is
+stable, and it holds every row in memory.'''
+
+    width, rows = peek_width(header, rows)
+
+    if width is None:
+        return header, rows
+
+    parts: list[tuple[int, bool, bool]] = []
+
+    for key in keys:
+        positions = resolve((key.column,), header, width)
+        if not positions:
+            raise out_of_range(key.column, width)
+        parts.extend((i, key.numeric, key.reverse) for i in positions)
+
+    def row_key(row: Row) -> tuple[Any, ...]:
+        return tuple(cell_key(row[i], numeric, reverse) for i, numeric, reverse in parts)
+
+    return header, iter(sorted(rows, key=row_key))
 
 
 def select(header: Header | None, rows: Rows,
@@ -502,8 +591,16 @@ def make_parser() -> argparse.ArgumentParser:
             'In a numeric test, a cell that is not a number fails every operator but !=.',
             'A row must match every -e.',
             '',
-            'csvv filters first, then selects, whatever order the options are in.',
-            'Use --select=LIST or -e=EXPR if the value starts with "-".',
+            'KEY is COL[:FLAGS], where COL is a column or a slice of columns.',
+            'FLAGS holds n to compare numbers, r to reverse, or both, as in median:nr.',
+            'A slice stands for one key per column, all with the same FLAGS.',
+            'Text after the last ":" is FLAGS only if it holds nothing but n and r.',
+            'In a numeric key, cells that are not numbers sort after the numbers.',
+            'Text compares by code point, like LC_ALL=C sort.',
+            'The sort is stable, and the first --sort takes priority.',
+            '',
+            'csvv filters first, then sorts, then selects, whatever order the options are in.',
+            'Use -e=EXPR, --sort=KEY, or --select=LIST if the value starts with "-".',
             '',
             'Examples:',
             "  %(prog)s -F ';' in.csv                convert semicolon-separated input to CSV",
@@ -515,6 +612,8 @@ def make_parser() -> argparse.ArgumentParser:
             '  %(prog)s -H --select name,1 in.csv    the column named "name", then the first',
             "  %(prog)s -H -e 'median<0.03' in.csv   rows whose median is below 0.03",
             "  %(prog)s -H -e 'name~^B' in.csv       rows whose name starts with B",
+            '  %(prog)s -H --sort median:n in.csv    rows by increasing median',
+            '  %(prog)s --sort 2:3:nr in.csv         rows by columns 2 and 3, largest first',
             )
 
     version_lines = (f'%(prog)s {__version__}',
@@ -545,6 +644,9 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument('-e', '--filter', metavar='EXPR', type=condition, action='append',
             default=[], help='keep only rows matching EXPR (repeatable)')
 
+    parser.add_argument('--sort', metavar='KEY', type=sort_key, action='append',
+            default=[], help='sort rows by KEY (repeatable)')
+
     parser.add_argument('--select', metavar='LIST', type=column_list, action='append',
             default=[], help='output only the columns in LIST, in that order (repeatable)')
 
@@ -565,6 +667,8 @@ def main(argv: list[str] | None = None) -> int | None:
     if not args.header:
         if problem := check_without_header((c.column for c in args.filter), single=True):
             parser.error(f'argument -e/--filter: {problem}')
+        if problem := check_without_header(k.column for k in args.sort):
+            parser.error(f'argument --sort: {problem}')
         if problem := check_without_header(selected):
             parser.error(f'argument --select: {problem}')
 
@@ -586,6 +690,8 @@ def main(argv: list[str] | None = None) -> int | None:
             header, rows = read(stream, args.delimiter, args.header, args.ragged, source)
             if args.filter:
                 header, rows = keep_matching(header, rows, args.filter)
+            if args.sort:
+                header, rows = sort_rows(header, rows, args.sort)
             if selected:
                 header, rows = select(header, rows, selected)
             write(sys.stdout, out_delimiter, header, rows)
