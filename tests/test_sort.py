@@ -202,3 +202,15 @@ def test_bad_column_is_a_data_error(run: Run, key: str, message: bytes) -> None:
     result = run('-H', '--sort', key, stdin=b'a,b\n1,2\n')
     assert (result.returncode, result.stdout) == (1, b'')
     assert message in result.stderr
+
+
+@pytest.mark.parametrize('args', [
+    ('-e', '2>5', '--sort', '9'),
+    ('-e', '2>5', '--select', '1', '-e', '#9<1'),
+])
+def test_column_errors_do_not_depend_on_the_data(run: Run, args: tuple[str, ...]) -> None:
+    # The filter drops every row, so no row ever reaches the bad column.
+    for data in (b'a,1\n', b'a,9\n'):
+        result = run(*args, stdin=data)
+        assert result.returncode == 1
+        assert b'out of range' in result.stderr

@@ -5,9 +5,11 @@
 
 import csv
 import io
+import os
 import signal
 import subprocess
 import sys
+import types
 
 import pytest
 
@@ -211,3 +213,26 @@ def test_broken_pipe_is_silent(tmp_path) -> None:
         proc.wait()
     assert stderr == b''
     assert proc.returncode in (0, -signal.SIGPIPE)
+
+
+@pytest.mark.skipif(not os.path.exists('/dev/full'), reason='needs /dev/full')
+@pytest.mark.parametrize('lines', [1, 100_000])
+def test_failed_write_is_reported_once(tmp_path, lines: int) -> None:
+    # Small output fails only when it is flushed, and large output fails
+    # while it is written.  Both must give csvv's message and status 1.
+    path = tmp_path / 'in.csv'
+    path.write_bytes(b'a,b\n' * lines)
+    with open('/dev/full', 'wb') as full:
+        result = subprocess.run([sys.executable, str(CSVV), str(path)], stdout=full,
+                                stderr=subprocess.PIPE, check=False)
+    assert result.returncode == 1
+    assert result.stderr == b'csvv: No space left on device\n'
+
+
+def test_interrupt_exits_quietly(csvv: types.ModuleType, monkeypatch) -> None:
+    def interrupted(*_args: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(csvv, 'process', interrupted)
+    monkeypatch.setattr(csvv, 'configure_stdio', lambda: None)
+    assert csvv.main([]) == 128 + signal.SIGINT

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 '''
-Filter, sort, and select the columns of a CSV file.
+Filter and sort the rows of a CSV file, and select its columns.
 '''
 
 __author__ = 'Steven Ward'
@@ -18,6 +18,7 @@ import io
 import itertools
 import math
 import operator
+import os
 import re
 import signal
 import sys
@@ -165,7 +166,11 @@ def to_number(s: str) -> Number | None:
     '''Convert s to a number, or return None if it is not one.
 int() is tried first, so that long integers compare exactly, where float()
 alone would make 9007199254740993 equal 9007199254740992.  NaN is not a number,
-since it compares false with everything and would break a sort.'''
+since it compares false with everything and would break a sort.
+
+An integer longer than 4300 digits, Python's default limit for int(), falls
+through to float() and becomes infinite, so two such integers compare equal.
+Lifting the limit would let one huge field take quadratic time to parse.'''
 
     try:
         return int(s)
@@ -446,39 +451,25 @@ def fit_rows(records: Iterable[Record], width: int, ragged: str, source: str) ->
 
 
 def read(stream: TextIO, delimiter: str, has_header: bool, ragged: str,
-         source: str) -> tuple[Header | None, Rows]:
+         source: str) -> tuple[Header | None, int | None, Rows]:
     '''Read the header, if has_header, and the rows from stream.
-The first record sets the width that every other row must match.'''
+The first record sets the width that every other row is made to match, so the
+stages work out column positions once from the width and use them for every
+row.  The width is None when the input is empty.'''
 
     records = read_records(stream, delimiter, source)
     first = next(records, None)
 
     if first is None:
-        return None, iter(())
+        return None, None, iter(())
 
     width = len(first.row)
 
     if has_header:
-        return Header(tuple(first.row)), fit_rows(records, width, ragged, source)
+        return Header(tuple(first.row)), width, fit_rows(records, width, ragged, source)
 
-    return None, fit_rows(itertools.chain((first,), records), width, ragged, source)
-
-
-def peek_width(header: Header | None, rows: Rows) -> tuple[int | None, Rows]:
-    '''Return the width of the input, and rows with nothing consumed.
-Every row already has the width of the first record, so column positions are
-worked out once from it and serve every row.  The width is None when there is
-neither a header nor a row.'''
-
-    if header is not None:
-        return len(header.names), rows
-
-    first = next(rows, None)
-
-    if first is None:
-        return None, iter(())
-
-    return len(first), itertools.chain((first,), rows)
+    rows = fit_rows(itertools.chain((first,), records), width, ragged, source)
+    return None, width, rows
 
 
 def describe(positions: Iterable[int], header: Header | None) -> str:
@@ -567,14 +558,9 @@ names, and warn about them once every row has passed.'''
         return generate()
 
 
-def keep_matching(header: Header | None, rows: Rows, conditions: Iterable[Condition],
-                  debug: Debug) -> tuple[Header | None, Rows]:
+def keep_matching(header: Header | None, width: int, rows: Rows,
+                  conditions: Iterable[Condition], debug: Debug) -> tuple[Header | None, Rows]:
     '''Keep only the rows that pass every condition.'''
-
-    width, rows = peek_width(header, rows)
-
-    if width is None:
-        return header, rows
 
     tests: list[tuple[Condition, int]] = []
 
@@ -609,16 +595,11 @@ number from ever being compared with text.'''
     return Descending(cell) if reverse else cell
 
 
-def sort_rows(header: Header | None, rows: Rows, keys: Iterable[SortKey],
+def sort_rows(header: Header | None, width: int, rows: Rows, keys: Iterable[SortKey],
               debug: Debug) -> tuple[Header | None, Rows]:
     '''Sort the rows by the keys, the first key taking priority.
 A slice stands for one key per column, all with the same flags.  The sort is
 stable, and it holds every row in memory.'''
-
-    width, rows = peek_width(header, rows)
-
-    if width is None:
-        return header, rows
 
     parts: list[tuple[int, bool, bool]] = []
     numeric_checks: list[tuple[str, int]] = []
@@ -644,14 +625,9 @@ stable, and it holds every row in memory.'''
     return header, iter(sorted(rows, key=row_key))
 
 
-def select(header: Header | None, rows: Rows, columns: Iterable[Column],
+def select(header: Header | None, width: int, rows: Rows, columns: Iterable[Column],
            debug: Debug) -> tuple[Header | None, Rows]:
     '''Keep only the named columns, in the order named.'''
-
-    width, rows = peek_width(header, rows)
-
-    if width is None:
-        return header, rows
 
     positions: list[int] = []
 
@@ -807,18 +783,21 @@ def process(args: argparse.Namespace, selected: list[Column], stream: TextIO, so
             debug: Debug) -> None:
     '''Filter, sort, and select the rows of stream, and write them to stdout.'''
 
-    header, rows = read(stream, args.delimiter, args.header, args.ragged, source)
+    header, width, rows = read(stream, args.delimiter, args.header, args.ragged, source)
     rows = debug.counting(rows, 'read')
 
-    if args.filter:
-        header, rows = keep_matching(header, rows, args.filter, debug)
-        rows = debug.counting(rows, 'kept by the filter')
+    # Empty input has no columns to check the options against.
+    if width is not None:
 
-    if args.sort:
-        header, rows = sort_rows(header, rows, args.sort, debug)
+        if args.filter:
+            header, rows = keep_matching(header, width, rows, args.filter, debug)
+            rows = debug.counting(rows, 'kept by the filter')
 
-    if selected:
-        header, rows = select(header, rows, selected, debug)
+        if args.sort:
+            header, rows = sort_rows(header, width, rows, args.sort, debug)
+
+        if selected:
+            header, rows = select(header, width, rows, selected, debug)
 
     rows = debug.counting(rows, 'written')
 
@@ -859,18 +838,34 @@ def main(argv: list[str] | None = None) -> int | None:
                         errors='surrogateescape', newline=''))
                 source = args.FILE
 
-            process(args, selected, stream, source, Debug(args.debug, parser.prog))
+            try:
+                process(args, selected, stream, source, Debug(args.debug, parser.prog))
+            finally:
+                # Flush here, so that a failed write is reported below rather
+                # than at exit, where Python prints its own message and exits
+                # with status 120.  It also puts the rows written so far ahead
+                # of any error message.
+                sys.stdout.flush()
 
     except OSError as e:
         # A failed write to stdout has no file name.
-        where = '' if e.filename is None else f'{e.filename}: '
-        print(f'{parser.prog}: {where}{e.strerror}', file=sys.stderr)
+        if e.filename is None:
+            # Send the unwritten output to /dev/null, so that the flush at
+            # exit cannot fail a second time.
+            with contextlib.suppress(OSError, ValueError):
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            where = ''
+        else:
+            where = f'{e.filename}: '
+        print(f'{parser.prog}: {where}{e.strerror or e}', file=sys.stderr)
         return 1
 
     except DataError as e:
-        sys.stdout.flush()
         print(f'{parser.prog}: {e}', file=sys.stderr)
         return 1
+
+    except KeyboardInterrupt:
+        return 128 + signal.SIGINT
 
     return 0
 
