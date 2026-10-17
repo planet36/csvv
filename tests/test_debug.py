@@ -39,9 +39,10 @@ def test_filter_notes(run: Run) -> None:
 
 
 def test_sort_notes(run: Run) -> None:
-    lines = debug_lines(run, '-H', '--sort', 'median:nr', '--sort', '1:2')
+    lines = debug_lines(run, '-H', '--sort', 'median:nr', '--sort', '1:2', '--sort', 'name:v')
     assert "csvv: --sort 'median:nr': column 3 ('median'), as numbers, reversed" in lines
     assert "csvv: --sort '1:2': columns 1 ('name'), 2 ('err'), as text" in lines
+    assert "csvv: --sort 'name:v': column 1 ('name'), as text in natural order" in lines
     assert 'csvv: sorting holds every row in memory' in lines
 
 

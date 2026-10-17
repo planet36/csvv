@@ -39,6 +39,23 @@ def test_key_parsing(csvv: types.ModuleType, text: str, column: str, numeric: bo
     assert (key.column.text, key.numeric, key.reverse) == (column, numeric, reverse)
 
 
+@pytest.mark.parametrize(('text', 'column', 'reverse'), [
+    ('file:v', 'file', False),
+    ('file:vr', 'file', True),
+    ('file:rv', 'file', True),
+    ('2:4:v', '2:4', False),
+    ('a:v:', None, False),
+])
+def test_natural_key_parsing(csvv: types.ModuleType, text: str, column: str | None,
+                             reverse: bool) -> None:
+    key = csvv.sort_key(text)
+    if column is None:
+        assert (key.column.text, key.natural) == (text, False)
+    else:
+        assert (key.column.text, key.numeric, key.natural, key.reverse) == (
+            column, False, True, reverse)
+
+
 def sort(run: Run, *args: str, cells: list[str]) -> list[str]:
     '''Sort one column of cells and return them in their new order.'''
     data = ''.join(f'{c}\n' for c in cells).encode()
@@ -81,6 +98,41 @@ def test_non_numbers_sort_last_when_reversed(run: Run) -> None:
 def test_long_integers_sort_exactly(run: Run) -> None:
     cells = ['9007199254740993', '9007199254740992']
     assert sort(run, '--sort', '1:n', cells=cells) == cells[::-1]
+
+
+def test_natural_order(run: Run) -> None:
+    cells = ['file10', 'file2', 'file1', 'file', 'a', '10', '9']
+    assert sort(run, '--sort', '1:v', cells=cells) == [
+        '9', '10', 'a', 'file', 'file1', 'file2', 'file10']
+
+
+def test_natural_order_compares_every_run(run: Run) -> None:
+    cells = ['v1.10', 'v1.9', 'v1.2.3', 'v1.2', 'v10.0']
+    assert sort(run, '--sort', '1:v', cells=cells) == [
+        'v1.2', 'v1.2.3', 'v1.9', 'v1.10', 'v10.0']
+
+
+def test_natural_reverse(run: Run) -> None:
+    cells = ['file2', 'file10', 'file1']
+    assert sort(run, '--sort', '1:vr', cells=cells) == ['file10', 'file2', 'file1']
+
+
+def test_natural_order_breaks_ties_by_leading_zeros(run: Run) -> None:
+    cells = ['file2', 'file002', 'file3', 'file02', 'file1']
+    assert sort(run, '--sort', '1:v', cells=cells) == [
+        'file1', 'file002', 'file02', 'file2', 'file3']
+    assert sort(run, '--sort', '1:vr', cells=cells) == [
+        'file3', 'file2', 'file02', 'file002', 'file1']
+
+
+def test_natural_order_takes_only_ascii_digits(run: Run) -> None:
+    # Arabic-Indic 2 is text, which sorts after the ASCII digits.
+    assert sort(run, '--sort', '1:v', cells=['\u0662', '10']) == ['10', '\u0662']
+
+
+def test_natural_order_has_no_limit_on_runs(csvv: types.ModuleType) -> None:
+    short, long = '9' * 5000, '1' + '0' * 5000
+    assert csvv.natural_key(short) < csvv.natural_key(long)
 
 
 def test_sort_is_stable(run: Run) -> None:
@@ -180,6 +232,7 @@ def test_ragged_row_stops_the_sort_before_any_output(run: Run) -> None:
     (':n', b'has no column'),
     ('#x', b'"#" must be followed by a position'),
     ('#0:n', b'numbered from 1'),
+    ('a:nv', b'has both n and v'),
 ])
 def test_bad_key_is_a_usage_error(run: Run, key: str, message: bytes) -> None:
     result = run('-H', '--sort', key, stdin=b'a\n')

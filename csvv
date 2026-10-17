@@ -53,6 +53,9 @@ COMPARISONS: dict[str, Callable[[Any, Any], bool]] = {
 
 REGEX_OPERATORS = ('~', '!~')
 
+# Only ASCII digits, as for numbers.  The group makes re.split() keep the runs.
+DIGIT_RUN = re.compile('([0-9]+)')
+
 # Two-character operators come first, so that the longest one wins where
 # several start at the same place.
 OPERATORS = sorted((*COMPARISONS, *REGEX_OPERATORS), key=len, reverse=True)
@@ -131,16 +134,17 @@ class SortKey:
     text: str
     column: Column
     numeric: bool
+    natural: bool
     reverse: bool
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Descending:
-    '''Text that sorts in reverse order.'''
-    text: str
+    '''A sort key that sorts in reverse order.'''
+    key: Any
 
     def __lt__(self, other: Self) -> bool:
-        return self.text > other.text
+        return bool(self.key > other.key)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -396,13 +400,13 @@ def condition(s: str) -> Condition:
 def sort_key(s: str) -> SortKey:
     '''Parse s as COL[:FLAGS].
 FLAGS is the text after the last ":", when that text is made only of the
-letters n and r.  Otherwise the whole of s is the column, so "2:" is the slice
-from column 2 onward, as in --select.  A column whose name ends in such
+letters n, r, and v.  Otherwise the whole of s is the column, so "2:" is the
+slice from column 2 onward, as in --select.  A column whose name ends in such
 letters, such as "a:n", is therefore named by position.'''
 
     head, colon, flags = s.rpartition(':')
 
-    if colon and flags and set(flags) <= set('nr'):
+    if colon and flags and set(flags) <= set('nrv'):
         column = Column(head)
     else:
         column, flags = Column(s), ''
@@ -410,9 +414,12 @@ letters, such as "a:n", is therefore named by position.'''
     if not column.text:
         raise argparse.ArgumentTypeError(f'{s!r} has no column')
 
+    if 'n' in flags and 'v' in flags:
+        raise argparse.ArgumentTypeError(f'{s!r} has both n and v, which exclude each other')
+
     check_forced(column)
 
-    return SortKey(s, column, 'n' in flags, 'r' in flags)
+    return SortKey(s, column, 'n' in flags, 'v' in flags, 'r' in flags)
 
 
 def check_without_header(columns: Iterable[Column], single: bool = False) -> str | None:
@@ -606,7 +613,19 @@ def keep_matching(header: Header | None, width: int, rows: Rows,
     return header, (row for row in rows if all(c.matches(row[i]) for c, i in tests))
 
 
-def cell_key(cell: str, numeric: bool, reverse: bool) -> Any:
+def natural_key(cell: str) -> tuple[str | tuple[int, str, str], ...]:
+    '''Return what to sort cell by in natural order, where file2 comes before file10.
+re.split() puts text at the even indexes and runs of digits at the odd ones,
+so two keys never compare text with a run.  A run compares by its length
+without leading zeros, and then as text, which gives numeric order without
+int() and its limit on length.  Runs of equal value then compare as written,
+so file02 sorts before file2 rather than tying with it, as in sort -V.'''
+
+    return tuple(part if i % 2 == 0 else (len(digits := part.lstrip('0')), digits, part)
+                 for i, part in enumerate(DIGIT_RUN.split(cell)))
+
+
+def cell_key(cell: str, numeric: bool, natural: bool, reverse: bool) -> Any:
     '''Return what to sort cell by.
 In a numeric key, a cell that is not a number sorts after the numbers in both
 directions, and among the others in text order.  The tags 0 and 1 keep a
@@ -618,7 +637,8 @@ number from ever being compared with text.'''
             return (0, -n if reverse else n)
         return (1, Descending(cell) if reverse else cell)
 
-    return Descending(cell) if reverse else cell
+    key = natural_key(cell) if natural else cell
+    return Descending(key) if reverse else key
 
 
 def sort_rows(header: Header | None, width: int, rows: Rows, keys: Iterable[SortKey],
@@ -627,17 +647,18 @@ def sort_rows(header: Header | None, width: int, rows: Rows, keys: Iterable[Sort
 A slice stands for one key per column, all with the same flags.  The sort is
 stable, and it holds every row in memory.'''
 
-    parts: list[tuple[int, bool, bool]] = []
+    parts: list[tuple[int, bool, bool, bool]] = []
     numeric_checks: list[tuple[str, int]] = []
 
     for key in keys:
         label = f'--sort {key.text!r}'
         resolved = resolve_some(key.column, header, width)
         debug.check_name(label, resolved)
-        debug.note(f'{label}: {describe(resolved.positions, header)}, '
-                   f'{"as numbers" if key.numeric else "as text"}'
+        order = ('as numbers' if key.numeric else
+                 'as text in natural order' if key.natural else 'as text')
+        debug.note(f'{label}: {describe(resolved.positions, header)}, {order}'
                    f'{", reversed" if key.reverse else ""}')
-        parts.extend((i, key.numeric, key.reverse) for i in resolved.positions)
+        parts.extend((i, key.numeric, key.natural, key.reverse) for i in resolved.positions)
         if key.numeric:
             numeric_checks.extend((label, i) for i in resolved.positions)
 
@@ -646,7 +667,8 @@ stable, and it holds every row in memory.'''
     rows = debug.non_numbers(rows, numeric_checks, 'sorted after the numbers')
 
     def row_key(row: Row) -> tuple[Any, ...]:
-        return tuple(cell_key(row[i], numeric, reverse) for i, numeric, reverse in parts)
+        return tuple(cell_key(row[i], numeric, natural, reverse)
+                     for i, numeric, natural, reverse in parts)
 
     return header, iter(sorted(rows, key=row_key))
 
@@ -732,9 +754,11 @@ def make_parser() -> argparse.ArgumentParser:
             'A row must match every -e.',
             '',
             'KEY is COL[:FLAGS], where COL is a column or a slice of columns.',
-            'FLAGS holds n to compare numbers, r to reverse, or both, as in median:nr.',
+            'FLAGS holds n to compare numbers or v for natural order,',
+            'and r to reverse, as in median:nr.',
+            'In natural order, runs of digits compare as numbers, so file2 sorts before file10.',
             'A slice stands for one key per column, all with the same FLAGS.',
-            'Text after the last ":" is FLAGS only if it holds nothing but n and r.',
+            'Text after the last ":" is FLAGS only if it holds nothing but n, r, and v.',
             'In a numeric key, cells that are not numbers sort after the numbers.',
             'Text compares by code point, like LC_ALL=C sort.',
             'The sort is stable, and the first --sort takes priority.',
@@ -755,6 +779,7 @@ def make_parser() -> argparse.ArgumentParser:
             "  %(prog)s -H -e 'median<0.03' in.csv   rows whose median is below 0.03",
             "  %(prog)s -H -e 'name~^B' in.csv       rows whose name starts with B",
             '  %(prog)s -H --sort median:n in.csv    rows by increasing median',
+            '  %(prog)s -H --sort file:v in.csv      rows by file, with file2 before file10',
             '  %(prog)s --sort 2:3:nr in.csv         rows by columns 2 and 3, largest first',
             )
 
