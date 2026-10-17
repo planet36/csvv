@@ -151,6 +151,21 @@ class Record:
     row: Row
 
 
+@dataclasses.dataclass(frozen=True)
+class Options:  # pylint: disable=too-many-instance-attributes
+    '''The command line, with each option in its final form.'''
+    file: str
+    header: bool
+    delimiter: str
+    output_delimiter: str
+    ragged: str
+    filter: tuple[Condition, ...]
+    sort: tuple[SortKey, ...]
+    # The columns of every --select, in order.
+    select: tuple[Column, ...]
+    debug: bool
+
+
 def separator(s: str) -> str:
     '''Convert s to a one-character field separator, where "\\t" means a tab.'''
     if s == r'\t':
@@ -791,30 +806,29 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def process(args: argparse.Namespace, selected: list[Column], stream: TextIO, source: str,
-            debug: Debug) -> None:
+def process(options: Options, stream: TextIO, source: str, debug: Debug) -> None:
     '''Filter, sort, and select the rows of stream, and write them to stdout.'''
 
-    header, width, rows = read(stream, args.delimiter, args.header, args.ragged, source)
+    header, width, rows = read(stream, options.delimiter, options.header, options.ragged,
+                               source)
     rows = debug.counting(rows, 'read')
 
     # Empty input has no columns to check the options against.
     if width is not None:
 
-        if args.filter:
-            header, rows = keep_matching(header, width, rows, args.filter, debug)
+        if options.filter:
+            header, rows = keep_matching(header, width, rows, options.filter, debug)
             rows = debug.counting(rows, 'kept by the filter')
 
-        if args.sort:
-            header, rows = sort_rows(header, width, rows, args.sort, debug)
+        if options.sort:
+            header, rows = sort_rows(header, width, rows, options.sort, debug)
 
-        if selected:
-            header, rows = select(header, width, rows, selected, debug)
+        if options.select:
+            header, rows = select(header, width, rows, options.select, debug)
 
     rows = debug.counting(rows, 'written')
 
-    out_delimiter = args.delimiter if args.output_delimiter is None else args.output_delimiter
-    write(sys.stdout, out_delimiter, header, rows)
+    write(sys.stdout, options.output_delimiter, header, rows)
 
     if debug.counts:
         summary = ', '.join(f'{name}: {n}' for name, n in debug.counts.items())
@@ -827,14 +841,26 @@ def main(argv: list[str] | None = None) -> int | None:
     parser = make_parser()
     args = parser.parse_args(argv)
 
-    selected = [column for columns in args.select for column in columns]
+    # argparse gives every option the type Any, so copy them into Options,
+    # where mypy can check how the rest of the program uses them.
+    options = Options(
+            file=args.FILE,
+            header=args.header,
+            delimiter=args.delimiter,
+            output_delimiter=(args.delimiter if args.output_delimiter is None
+                              else args.output_delimiter),
+            ragged=args.ragged,
+            filter=tuple(args.filter),
+            sort=tuple(args.sort),
+            select=tuple(column for columns in args.select for column in columns),
+            debug=args.debug)
 
-    if not args.header:
-        if problem := check_without_header((c.column for c in args.filter), single=True):
+    if not options.header:
+        if problem := check_without_header((c.column for c in options.filter), single=True):
             parser.error(f'argument -e/--filter: {problem}')
-        if problem := check_without_header(k.column for k in args.sort):
+        if problem := check_without_header(k.column for k in options.sort):
             parser.error(f'argument --sort: {problem}')
-        if problem := check_without_header(selected):
+        if problem := check_without_header(options.select):
             parser.error(f'argument --select: {problem}')
 
     csv.field_size_limit(FIELD_SIZE_LIMIT)
@@ -842,16 +868,16 @@ def main(argv: list[str] | None = None) -> int | None:
 
     try:
         with contextlib.ExitStack() as stack:
-            if args.FILE == '-':
+            if options.file == '-':
                 stream: TextIO = sys.stdin
                 source = 'stdin'
             else:
-                stream = stack.enter_context(open(args.FILE, encoding='utf-8-sig',
+                stream = stack.enter_context(open(options.file, encoding='utf-8-sig',
                         errors='surrogateescape', newline=''))
-                source = args.FILE
+                source = options.file
 
             try:
-                process(args, selected, stream, source, Debug(args.debug, parser.prog))
+                process(options, stream, source, Debug(options.debug, parser.prog))
             finally:
                 # Flush here, so that a failed write is reported below rather
                 # than at exit, where Python prints its own message and exits
