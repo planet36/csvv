@@ -1,0 +1,4 @@
+# pytest puts this directory on sys.path, so the tests import conftest as a
+# local module.  Without this, ruff sorts it with the third-party imports.
+[lint.isort]
+known-local-folder = ["conftest"]
