@@ -96,7 +96,13 @@ def test_warns_about_an_ignored_position(run: Run) -> None:
 def test_warns_about_non_numbers_in_a_filter(run: Run) -> None:
     lines = debug_lines(run, '-H', '-e', 'median<0.03')
     assert ("csvv: warning: -e 'median<0.03' met 2 cells that are not numbers, "
-            'which failed the test') in lines
+            'which failed the comparison') in lines
+
+
+def test_warns_that_non_numbers_pass_not_equal(run: Run) -> None:
+    lines = debug_lines(run, '-H', '-e', 'median!=0.03')
+    assert ("csvv: warning: -e 'median!=0.03' met 2 cells that are not numbers, "
+            'which counted as unequal') in lines
 
 
 def test_warns_about_non_numbers_in_a_sort(run: Run) -> None:

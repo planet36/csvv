@@ -608,8 +608,12 @@ def keep_matching(header: Header | None, width: int, rows: Rows,
         debug.note(f'{label}: {describe(resolved.positions, header)} {c.op} {value}, {mode}')
         tests.append((c, resolved.positions[0]))
 
-    rows = debug.non_numbers(rows, [(f'-e {c.text!r}', i) for c, i in tests
-                                    if c.number is not None], 'failed the test')
+    # A cell that is not a number is never equal to VALUE, so != passes it.
+    numeric = [(f'-e {c.text!r}', i, c.op == '!=') for c, i in tests if c.number is not None]
+    rows = debug.non_numbers(rows, [(label, i) for label, i, unequal in numeric if unequal],
+                             'counted as unequal')
+    rows = debug.non_numbers(rows, [(label, i) for label, i, unequal in numeric if not unequal],
+                             'failed the comparison')
 
     return header, (row for row in rows if all(c.matches(row[i]) for c, i in tests))
 
