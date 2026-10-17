@@ -97,12 +97,13 @@ md5sum big.iso,0.349
 
 ### Sorting
 
-`--sort` takes `COL[:FLAGS]`, where FLAGS holds `n` to compare numbers or `v` for natural order, and `r` to reverse, as in `median:nr`.
+`--sort` takes `COL[:FLAGS]`, where FLAGS holds `n` to compare numbers or `v` for natural order, `i` to ignore case, and `r` to reverse, as in `median:nr`.
 
 - **The sort is stable**, and the first `--sort` takes priority over the next.
 - **A slice stands for one key per column**, so `--sort 2:4:n` sorts by column 2, then 3, then 4, all as numbers.
 - **In a numeric key, cells that are not numbers sort after the numbers**, in either direction.
 - **In natural order, a run of digits compares as a number**, so `file2` sorts before `file10`, and `v1.9` before `v1.10`.  Runs of equal value compare as written, so `file02` sorts before `file2`.  The letter follows `sort -V`, whose version order is similar but not identical.
+- **With `i`, text compares without case**, after `str.casefold()`.  Text that differs only in case then compares as written, so `A` sorts just before `a`.  In a numeric key, `i` applies to the cells that are not numbers, so `N/A` and `n/a` sort together.  Leading and trailing whitespace still counts.
 - **Text compares by code point**, like `LC_ALL=C sort`.
 
 Sorting holds every row in memory.  Without `--sort`, csvv streams its input and runs in constant memory.

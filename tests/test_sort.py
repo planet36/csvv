@@ -56,6 +56,22 @@ def test_natural_key_parsing(csvv: types.ModuleType, text: str, column: str | No
             column, False, True, reverse)
 
 
+# The fields are the column, numeric, natural, ignore_case, and reverse.
+@pytest.mark.parametrize(('text', 'fields'), [
+    ('name:i', ('name', False, False, True, False)),
+    ('name:ir', ('name', False, False, True, True)),
+    ('name:vi', ('name', False, True, True, False)),
+    ('name:ni', ('name', True, False, True, False)),
+    ('name:nir', ('name', True, False, True, True)),
+    ('2:4:i', ('2:4', False, False, True, False)),
+    ('a:i:', ('a:i:', False, False, False, False)),
+])
+def test_ignore_case_key_parsing(csvv: types.ModuleType, text: str,
+                                 fields: tuple[str, bool, bool, bool, bool]) -> None:
+    key = csvv.sort_key(text)
+    assert (key.column.text, key.numeric, key.natural, key.ignore_case, key.reverse) == fields
+
+
 def sort(run: Run, *args: str, cells: list[str]) -> list[str]:
     '''Sort one column of cells and return them in their new order.'''
     data = ''.join(f'{c}\n' for c in cells).encode()
@@ -133,6 +149,35 @@ def test_natural_order_takes_only_ascii_digits(run: Run) -> None:
 def test_natural_order_has_no_limit_on_runs(csvv: types.ModuleType) -> None:
     short, long = '9' * 5000, '1' + '0' * 5000
     assert csvv.natural_key(short) < csvv.natural_key(long)
+
+
+def test_ignore_case(run: Run) -> None:
+    cells = ['b', 'B', 'a', 'é', 'A', '10', 'É']
+    assert sort(run, '--sort', '1:i', cells=cells) == ['10', 'A', 'a', 'B', 'b', 'É', 'é']
+
+
+def test_ignore_case_reverse(run: Run) -> None:
+    cells = ['b', 'B', 'a', 'A']
+    assert sort(run, '--sort', '1:ir', cells=cells) == ['b', 'B', 'a', 'A']
+
+
+def test_ignore_case_folds_more_than_case(run: Run) -> None:
+    # ß folds to ss, and the tie with SS is broken by code point.
+    cells = ['st', 'ß', 'sr', 'SS']
+    assert sort(run, '--sort', '1:i', cells=cells) == ['sr', 'SS', 'ß', 'st']
+
+
+def test_ignore_case_in_natural_order(run: Run) -> None:
+    cells = ['File10', 'file2', 'FILE1', 'file02', 'File2']
+    assert sort(run, '--sort', '1:vi', cells=cells) == [
+        'FILE1', 'file02', 'File2', 'file2', 'File10']
+
+
+def test_ignore_case_applies_to_non_numbers(run: Run) -> None:
+    cells = ['3', 'n/a', '1', 'N/A', 'missing']
+    assert sort(run, '--sort', '1:n', cells=cells) == ['1', '3', 'N/A', 'missing', 'n/a']
+    assert sort(run, '--sort', '1:ni', cells=cells) == ['1', '3', 'missing', 'N/A', 'n/a']
+    assert sort(run, '--sort', '1:nir', cells=cells) == ['3', '1', 'n/a', 'N/A', 'missing']
 
 
 def test_sort_is_stable(run: Run) -> None:

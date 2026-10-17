@@ -135,6 +135,7 @@ class SortKey:
     column: Column
     numeric: bool
     natural: bool
+    ignore_case: bool
     reverse: bool
 
 
@@ -400,13 +401,13 @@ def condition(s: str) -> Condition:
 def sort_key(s: str) -> SortKey:
     '''Parse s as COL[:FLAGS].
 FLAGS is the text after the last ":", when that text is made only of the
-letters n, r, and v.  Otherwise the whole of s is the column, so "2:" is the
+letters i, n, r, and v.  Otherwise the whole of s is the column, so "2:" is the
 slice from column 2 onward, as in --select.  A column whose name ends in such
 letters, such as "a:n", is therefore named by position.'''
 
     head, colon, flags = s.rpartition(':')
 
-    if colon and flags and set(flags) <= set('nrv'):
+    if colon and flags and set(flags) <= set('inrv'):
         column = Column(head)
     else:
         column, flags = Column(s), ''
@@ -419,7 +420,7 @@ letters, such as "a:n", is therefore named by position.'''
 
     check_forced(column)
 
-    return SortKey(s, column, 'n' in flags, 'v' in flags, 'r' in flags)
+    return SortKey(s, column, 'n' in flags, 'v' in flags, 'i' in flags, 'r' in flags)
 
 
 def check_without_header(columns: Iterable[Column], single: bool = False) -> str | None:
@@ -625,20 +626,29 @@ so file02 sorts before file2 rather than tying with it, as in sort -V.'''
                  for i, part in enumerate(DIGIT_RUN.split(cell)))
 
 
-def cell_key(cell: str, numeric: bool, natural: bool, reverse: bool) -> Any:
+def text_key(cell: str, natural: bool, ignore_case: bool) -> Any:
+    '''Return what to sort cell by as text.
+With ignore_case, text compares after str.casefold(), and text that folds the
+same then compares as written, so A sorts just before a rather than tying.'''
+
+    folded = cell.casefold() if ignore_case else cell
+    key = natural_key(folded) if natural else folded
+    return (key, cell) if ignore_case else key
+
+
+def cell_key(cell: str, key: SortKey) -> Any:
     '''Return what to sort cell by.
 In a numeric key, a cell that is not a number sorts after the numbers in both
-directions, and among the others in text order.  The tags 0 and 1 keep a
-number from ever being compared with text.'''
+directions, and among the others as text.  The tags 0 and 1 keep a number from
+ever being compared with text.'''
 
-    if numeric:
-        n = to_number(cell)
-        if n is not None:
-            return (0, -n if reverse else n)
-        return (1, Descending(cell) if reverse else cell)
+    if key.numeric and (n := to_number(cell)) is not None:
+        return (0, -n if key.reverse else n)
 
-    key = natural_key(cell) if natural else cell
-    return Descending(key) if reverse else key
+    text = text_key(cell, key.natural, key.ignore_case)
+    if key.reverse:
+        text = Descending(text)
+    return (1, text) if key.numeric else text
 
 
 def sort_rows(header: Header | None, width: int, rows: Rows, keys: Iterable[SortKey],
@@ -647,7 +657,7 @@ def sort_rows(header: Header | None, width: int, rows: Rows, keys: Iterable[Sort
 A slice stands for one key per column, all with the same flags.  The sort is
 stable, and it holds every row in memory.'''
 
-    parts: list[tuple[int, bool, bool, bool]] = []
+    parts: list[tuple[int, SortKey]] = []
     numeric_checks: list[tuple[str, int]] = []
 
     for key in keys:
@@ -657,8 +667,9 @@ stable, and it holds every row in memory.'''
         order = ('as numbers' if key.numeric else
                  'as text in natural order' if key.natural else 'as text')
         debug.note(f'{label}: {describe(resolved.positions, header)}, {order}'
+                   f'{", ignoring case" if key.ignore_case else ""}'
                    f'{", reversed" if key.reverse else ""}')
-        parts.extend((i, key.numeric, key.natural, key.reverse) for i in resolved.positions)
+        parts.extend((i, key) for i in resolved.positions)
         if key.numeric:
             numeric_checks.extend((label, i) for i in resolved.positions)
 
@@ -667,8 +678,7 @@ stable, and it holds every row in memory.'''
     rows = debug.non_numbers(rows, numeric_checks, 'sorted after the numbers')
 
     def row_key(row: Row) -> tuple[Any, ...]:
-        return tuple(cell_key(row[i], numeric, natural, reverse)
-                     for i, numeric, natural, reverse in parts)
+        return tuple(cell_key(row[i], key) for i, key in parts)
 
     return header, iter(sorted(rows, key=row_key))
 
@@ -755,11 +765,12 @@ def make_parser() -> argparse.ArgumentParser:
             '',
             'KEY is COL[:FLAGS], where COL is a column or a slice of columns.',
             'FLAGS holds n to compare numbers or v for natural order,',
-            'and r to reverse, as in median:nr.',
+            'i to ignore case, and r to reverse, as in median:nr.',
             'In natural order, runs of digits compare as numbers, so file2 sorts before file10.',
+            'With i, text that differs only in case compares as written, so A sorts before a.',
             'A slice stands for one key per column, all with the same FLAGS.',
-            'Text after the last ":" is FLAGS only if it holds nothing but n, r, and v.',
-            'In a numeric key, cells that are not numbers sort after the numbers.',
+            'Text after the last ":" is FLAGS only if it holds nothing but i, n, r, and v.',
+            'In a numeric key, cells that are not numbers sort after the numbers, as text.',
             'Text compares by code point, like LC_ALL=C sort.',
             'The sort is stable, and the first --sort takes priority.',
             '',
