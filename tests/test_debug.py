@@ -65,6 +65,13 @@ def test_sort_notes(run: Run) -> None:
     assert 'csvv: sorting holds every row in memory' in lines
 
 
+def test_select_regex_notes(run: Run) -> None:
+    lines = debug_lines(run, '-H', '--select-regex', 'e', '--select', 'name')
+    assert ("csvv: --select-regex 'e': columns 1 ('name'), 2 ('err'), 3 ('median')"
+            in lines)
+    assert "csvv: --select 'name': column 1 ('name')" in lines
+
+
 def test_select_notes_without_header(run: Run) -> None:
     lines = debug_lines(run, '--select', '3,1:2')
     assert "csvv: --select '3': column 3" in lines

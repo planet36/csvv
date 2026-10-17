@@ -2,6 +2,9 @@
 # SPDX-FileCopyrightText: Steven Ward
 # SPDX-License-Identifier: MPL-2.0
 
+# The tool is kept in one file on purpose, so it may pass pylint's 1000 lines.
+# pylint: disable=too-many-lines
+
 '''
 Filter and sort the rows of a CSV file, and select its columns.
 '''
@@ -77,6 +80,10 @@ class Header:
         '''Return the 0-based position of every column named name.'''
         return [i for i, n in enumerate(self.names) if n == name]
 
+    def search(self, regex: re.Pattern[str]) -> list[int]:
+        '''Return the 0-based position of every column whose name regex is found in.'''
+        return [i for i, n in enumerate(self.names) if regex.search(n)]
+
 
 @dataclasses.dataclass(frozen=True)
 class Column:
@@ -92,6 +99,17 @@ class Column:
     def choice_text(self) -> str:
         '''The text to read as a position or a slice.'''
         return self.text.removeprefix('#')
+
+
+@dataclasses.dataclass(frozen=True)
+class NamePattern:
+    '''One --select-regex, which names every column whose name it is found in.'''
+    text: str
+    regex: re.Pattern[str]
+
+
+# --select and --select-regex share one list, in the order they were given.
+type SelectItem = Column | NamePattern
 
 
 @dataclasses.dataclass(frozen=True)
@@ -186,8 +204,8 @@ class Options:  # pylint: disable=too-many-instance-attributes
     ragged: str
     filter: tuple[Condition, ...]
     sort: tuple[SortKey, ...]
-    # The columns of every --select, in order.
-    select: tuple[Column, ...]
+    # The items of every --select and --select-regex, in order.
+    select: tuple[SelectItem, ...]
     debug: bool
 
 
@@ -371,6 +389,19 @@ def column_list(s: str) -> list[Column]:
         check_forced(column)
 
     return columns
+
+
+def name_pattern(s: str) -> list[NamePattern]:
+    '''Compile s as a --select-regex.
+Return a list of one item, as column_list() does, since both options append to
+one list.'''
+
+    try:
+        regex = re.compile(s)
+    except re.error as e:
+        raise argparse.ArgumentTypeError(f'{s!r}: invalid regex: {e}') from e
+
+    return [NamePattern(s, regex)]
 
 
 def condition(s: str) -> Condition:
@@ -699,13 +730,23 @@ stable, and it holds every row in memory.'''
     return header, iter(sorted(rows, key=row_key))
 
 
-def select(header: Header | None, width: int, rows: Rows, columns: Iterable[Column],
+def select(header: Header | None, width: int, rows: Rows, items: Iterable[SelectItem],
            debug: Debug) -> tuple[Header | None, Rows]:
-    '''Keep only the named columns, in the order named.'''
+    '''Keep only the named columns, in the order named.
+A NamePattern names every column whose name it is found in, in header order,
+and naming none is an error, as an unknown name is.'''
 
     positions: list[int] = []
 
-    for column in columns:
+    for column in items:
+        if isinstance(column, NamePattern):
+            found = [] if header is None else header.search(column.regex)
+            if not found:
+                raise DataError(f'no column name matches the regex {column.text!r}')
+            debug.note(f'--select-regex {column.text!r}: {describe(found, header)}')
+            positions.extend(found)
+            continue
+
         label = f'--select {column.text!r}'
         resolved = resolve_column(column, header, width)
         debug.check_name(label, resolved)
@@ -794,6 +835,9 @@ def make_parser() -> argparse.ArgumentParser:
             '',
             'LIST is a comma-separated list of columns.',
             'A position out of range in LIST is ignored.',
+            'REGEX selects every column whose name it is found in, in header order.',
+            'It needs -H, and it is an error when it matches no column name.',
+            '--select and --select-regex join in the order given.',
             '',
             'Use -e=EXPR, --sort=KEY, or --select=LIST if the value starts with "-".',
             '',
@@ -805,6 +849,8 @@ def make_parser() -> argparse.ArgumentParser:
             '  %(prog)s --select=-1 in.csv           the last column',
             '  %(prog)s --select ::-1 in.csv         every column, in reverse order',
             '  %(prog)s -H --select name,1 in.csv    the column named "name", then the first',
+            '  %(prog)s -H --select name --select-regex ^time_ in.csv',
+            '                                    "name", then the columns matching ^time_',
             "  %(prog)s -H -e 'median<0.03' in.csv   rows whose median is below 0.03",
             "  %(prog)s -H -e 'name~^B' in.csv       rows whose name starts with B",
             "  %(prog)s -e '::~error' in.csv         rows with error in any column",
@@ -852,6 +898,12 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument('--select', metavar='LIST', type=column_list, action='append',
             default=[], help='output only the columns in LIST, in that order (repeatable)')
 
+    # The same dest as --select keeps the two in the order given.  The default
+    # comes from --select, since argparse uses the first default for a dest.
+    parser.add_argument('--select-regex', metavar='REGEX', type=name_pattern,
+            action='append', dest='select',
+            help='output the columns whose names match REGEX (repeatable)')
+
     parser.add_argument('--debug', action='store_true',
             help='print diagnostics and warnings to stderr')
 
@@ -890,6 +942,21 @@ def process(options: Options, stream: TextIO, source: str, debug: Debug) -> None
         debug.note(f'rows {summary}{" (not counting the header)" if header else ""}')
 
 
+def needs_header(options: Options) -> str | None:
+    '''Return the usage error for the first option that needs -H, if any.'''
+
+    if problem := check_without_header(c.column for c in options.filter):
+        return f'argument -e/--filter: {problem}'
+    if problem := check_without_header(k.column for k in options.sort):
+        return f'argument --sort: {problem}'
+    if problem := check_without_header(c for c in options.select if isinstance(c, Column)):
+        return f'argument --select: {problem}'
+    if patterns := [p for p in options.select if isinstance(p, NamePattern)]:
+        return (f'argument --select-regex: {patterns[0].text!r} matches column names, '
+                'which needs -H')
+    return None
+
+
 # pylint: disable=missing-function-docstring
 def main(argv: list[str] | None = None) -> int | None:
 
@@ -907,16 +974,11 @@ def main(argv: list[str] | None = None) -> int | None:
             ragged=args.ragged,
             filter=tuple(args.filter),
             sort=tuple(args.sort),
-            select=tuple(column for columns in args.select for column in columns),
+            select=tuple(item for items in args.select for item in items),
             debug=args.debug)
 
-    if not options.header:
-        if problem := check_without_header(c.column for c in options.filter):
-            parser.error(f'argument -e/--filter: {problem}')
-        if problem := check_without_header(k.column for k in options.sort):
-            parser.error(f'argument --sort: {problem}')
-        if problem := check_without_header(options.select):
-            parser.error(f'argument --select: {problem}')
+    if not options.header and (problem := needs_header(options)):
+        parser.error(problem)
 
     csv.field_size_limit(FIELD_SIZE_LIMIT)
     configure_stdio()

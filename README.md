@@ -62,6 +62,7 @@ csvv reads FILE, or stdin when FILE is absent or `-`, and writes CSV to stdout.
 | `-e, --filter EXPR` | keep only rows matching EXPR (repeatable) |
 | `--sort KEY` | sort rows by KEY (repeatable) |
 | `--select LIST` | output only the columns in LIST, in that order (repeatable) |
+| `--select-regex REGEX` | output the columns whose names match REGEX (repeatable) |
 | `--debug` | print diagnostics and warnings to stderr |
 | `-h, --help` | show the help and exit |
 | `-V, --version` | show the version and exit |
@@ -77,6 +78,16 @@ A column is named by its position, by a slice, or with `-H` by its name in the h
 - **With `-H`, an exact column name wins over a position.**  A `#` prefix forces a position, so `#3` always means the third column, even when the header has a column named `3`.
 
 Write `--select=-1` rather than `--select -1` when the value starts with `-`, and likewise for `-e` and `--sort`.
+
+`--select-regex REGEX` selects every column whose name REGEX is found in, in header order.  It needs `-H`, and a regex that matches no column name is an error, as an unknown name is.  It joins `--select` in the order the options are given, so a pattern can pick out columns whose exact names differ from file to file:
+
+```
+$ csvv -H --select command --select-regex '^parameter_' chunk-size.csv
+command,parameter_CHUNK-SIZE
+...
+```
+
+The whole value is one regex, so it may hold a comma.  A column picked by both options is output twice, as `--select 1,1` outputs column 1 twice.
 
 ### Filtering
 

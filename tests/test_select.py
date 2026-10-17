@@ -173,3 +173,78 @@ def test_zero_with_header_and_no_such_name(run: Run) -> None:
 def test_zero_with_header_and_such_a_name(run: Run) -> None:
     result = run('-H', '--select', '0', stdin=b'0,b\n1,2\n')
     assert result.stdout == b'0\n1\n'
+
+
+BENCH = b'command,time_mean,time_median,user,time_max\nsleep 1,1.0,1.0,0.0,1.1\n'
+
+
+def header_of(run: Run, *args: str, data: bytes = BENCH) -> bytes:
+    '''Run csvv with -H and return the header line it writes.'''
+    result = run('-H', *args, stdin=data)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.split(b'\n')[0]
+
+
+def test_regex_selects_matching_columns_in_header_order(run: Run) -> None:
+    assert header_of(run, '--select-regex', '^time_') == b'time_mean,time_median,time_max'
+    assert header_of(run, '--select-regex', 'max|mean') == b'time_mean,time_max'
+
+
+def test_regex_selects_the_rows_too(run: Run) -> None:
+    result = run('-H', '--select-regex', '_me', stdin=BENCH)
+    assert result.stdout == b'time_mean,time_median\n1.0,1.0\n'
+
+
+def test_regex_can_ignore_case(run: Run) -> None:
+    assert header_of(run, '--select-regex', '(?i)^USER$') == b'user'
+
+
+def test_regex_may_hold_a_comma(run: Run) -> None:
+    assert header_of(run, '--select-regex', '^time_m.{2,3}$') == b'time_mean,time_max'
+
+
+@pytest.mark.parametrize(('args', 'expected'), [
+    (('--select', 'command', '--select-regex', '^time_m'),
+     b'command,time_mean,time_median,time_max'),
+    (('--select-regex', '^time_m', '--select', 'command'),
+     b'time_mean,time_median,time_max,command'),
+    (('--select-regex', 'max', '--select', 'user', '--select-regex', 'mean'),
+     b'time_max,user,time_mean'),
+    (('--select', '1', '--select-regex', 'user', '--select', '-1'),
+     b'command,user,time_max'),
+])
+def test_regex_joins_select_in_the_order_given(run: Run, args: tuple[str, ...],
+                                               expected: bytes) -> None:
+    assert header_of(run, *args) == expected
+
+
+def test_regex_can_repeat_a_column(run: Run) -> None:
+    assert header_of(run, '--select', 'command', '--select-regex', 'mand') == b'command,command'
+
+
+def test_regex_with_header_only(run: Run) -> None:
+    result = run('-H', '--select-regex', 'user', stdin=b'command,user\n')
+    assert (result.returncode, result.stdout) == (0, b'user\n')
+
+
+def test_regex_with_empty_input(run: Run) -> None:
+    result = run('-H', '--select-regex', 'x', stdin=b'')
+    assert (result.returncode, result.stdout) == (0, b'')
+
+
+def test_regex_without_header_is_a_usage_error(run: Run) -> None:
+    result = run('--select-regex', 'user', stdin=BENCH)
+    assert result.returncode == 2
+    assert b"argument --select-regex: 'user' matches column names, which needs -H" in result.stderr
+
+
+def test_invalid_regex_is_a_usage_error(run: Run) -> None:
+    result = run('-H', '--select-regex', '(', stdin=BENCH)
+    assert result.returncode == 2
+    assert b"'(': invalid regex" in result.stderr
+
+
+def test_regex_that_matches_nothing_is_a_data_error(run: Run) -> None:
+    result = run('-H', '--select-regex', 'nope', stdin=BENCH)
+    assert (result.returncode, result.stdout) == (1, b'')
+    assert result.stderr == b"csvv: no column name matches the regex 'nope'\n"
