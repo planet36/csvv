@@ -248,9 +248,13 @@ even when it could also be read as a position.'''
     if header is not None and not column.forced:
         matches = header.lookup(column.text)
         if len(matches) > 1:
-            where = ', '.join(str(i + 1) for i in matches)
+            numbers = [str(i + 1) for i in matches]
+            if len(numbers) == 2:
+                where = f'{numbers[0]} and {numbers[1]} both'
+            else:
+                where = f'{", ".join(numbers[:-1])}, and {numbers[-1]} all'
             raise DataError(f'column name {column.text!r} is ambiguous, '
-                            f'since columns {where} all have it')
+                            f'since columns {where} have it')
         if matches:
             return Resolved(column, matches, by_name=True, is_slice=False)
 

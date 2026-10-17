@@ -91,8 +91,10 @@ def test_names_match_exactly(csvv: types.ModuleType) -> None:
 
 
 def test_duplicate_name_is_ambiguous(csvv: types.ModuleType) -> None:
-    with pytest.raises(csvv.DataError, match='columns 1, 3 all have it'):
+    with pytest.raises(csvv.DataError, match='columns 1 and 3 both have it'):
         positions(csvv, 'x', 3, ('x', 'y', 'x'))
+    with pytest.raises(csvv.DataError, match='columns 1, 2, and 4 all have it'):
+        positions(csvv, 'x', 4, ('x', 'x', 'y', 'x'))
     assert positions(csvv, '#3', 3, ('x', 'y', 'x')) == [3]
 
 
