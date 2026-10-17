@@ -88,8 +88,20 @@ class Column:
 
 
 @dataclasses.dataclass(frozen=True)
+class Resolved:
+    '''The columns that one item names.'''
+    column: Column
+    positions: list[int]
+    # Whether the item matched a column name, rather than being read as a
+    # position or a slice.
+    by_name: bool
+    is_slice: bool
+
+
+@dataclasses.dataclass(frozen=True)
 class Condition:
     '''One -e test, COL OP VALUE.'''
+    text: str
     column: Column
     op: str
     value: str
@@ -115,6 +127,7 @@ class Condition:
 @dataclasses.dataclass(frozen=True)
 class SortKey:
     '''One --sort key, COL[:FLAGS].'''
+    text: str
     column: Column
     numeric: bool
     reverse: bool
@@ -222,52 +235,57 @@ that exist, as in Python.'''
     return list(range(high, low - 1, step))
 
 
-def resolve(columns: Iterable[Column], header: Header | None, width: int) -> list[int]:
-    '''Return the 0-based positions that columns name, in order.
+def resolve_column(column: Column, header: Header | None, width: int) -> Resolved:
+    '''Work out which columns one item names.
 With a header, an item that exactly matches a column name refers to that column,
 even when it could also be read as a position.'''
 
-    result: list[int] = []
+    if header is not None and not column.forced:
+        matches = header.lookup(column.text)
+        if len(matches) > 1:
+            where = ', '.join(str(i + 1) for i in matches)
+            raise DataError(f'column name {column.text!r} is ambiguous, '
+                            f'since columns {where} all have it')
+        if matches:
+            return Resolved(column, matches, by_name=True, is_slice=False)
 
-    for column in columns:
+    try:
+        choice = parse_choice(column.choice_text)
+    except ValueError as e:
+        raise DataError(f'{column.text!r}: {e}') from e
 
-        if header is not None and not column.forced:
-            matches = header.lookup(column.text)
-            if len(matches) > 1:
-                where = ', '.join(str(i + 1) for i in matches)
-                raise DataError(f'column name {column.text!r} is ambiguous, '
-                                f'since columns {where} all have it')
-            if matches:
-                result.extend(matches)
-                continue
+    if choice is None:
+        raise DataError(f'no column named {column.text!r}')
 
-        try:
-            choice = parse_choice(column.choice_text)
-        except ValueError as e:
-            raise DataError(f'{column.text!r}: {e}') from e
-
-        if choice is None:
-            raise DataError(f'no column named {column.text!r}')
-
-        result.extend(pick(choice, width))
-
-    return result
+    return Resolved(column, pick(choice, width), by_name=False,
+                    is_slice=isinstance(choice, slice))
 
 
-def resolve_one(column: Column, header: Header | None, width: int) -> int:
-    '''Return the 0-based position of the single column that column names.'''
+def resolve(columns: Iterable[Column], header: Header | None, width: int) -> list[int]:
+    '''Return the 0-based positions that columns name, in order.'''
+    return [i for c in columns for i in resolve_column(c, header, width).positions]
 
-    positions = resolve((column,), header, width)
 
-    is_name = header is not None and not column.forced and header.lookup(column.text)
+def resolve_some(column: Column, header: Header | None, width: int) -> Resolved:
+    '''Work out which columns one item names, where naming none is an error.'''
 
-    if not is_name and isinstance(parse_choice(column.choice_text), slice):
-        raise DataError(f'{column.text!r} is a slice, where only one column is allowed')
+    resolved = resolve_column(column, header, width)
 
-    if not positions:
+    if not resolved.positions:
         raise out_of_range(column, width)
 
-    return positions[0]
+    return resolved
+
+
+def resolve_one(column: Column, header: Header | None, width: int) -> Resolved:
+    '''Work out the single column that one item names.'''
+
+    resolved = resolve_some(column, header, width)
+
+    if resolved.is_slice:
+        raise DataError(f'{column.text!r} is a slice, where only one column is allowed')
+
+    return resolved
 
 
 def count(n: int, noun: str) -> str:
@@ -339,9 +357,9 @@ def condition(s: str) -> Condition:
             regex = re.compile(value)
         except re.error as e:
             raise argparse.ArgumentTypeError(f'{s!r}: invalid regex: {e}') from e
-        return Condition(column, op, value, None, regex)
+        return Condition(s, column, op, value, None, regex)
 
-    return Condition(column, op, value, to_number(value), None)
+    return Condition(s, column, op, value, to_number(value), None)
 
 
 def sort_key(s: str) -> SortKey:
@@ -363,7 +381,7 @@ letters, such as "a:n", is therefore named by position.'''
 
     check_forced(column)
 
-    return SortKey(column, 'n' in flags, 'r' in flags)
+    return SortKey(s, column, 'n' in flags, 'r' in flags)
 
 
 def check_without_header(columns: Iterable[Column], single: bool = False) -> str | None:
@@ -463,8 +481,94 @@ neither a header nor a row.'''
     return len(first), itertools.chain((first,), rows)
 
 
-def keep_matching(header: Header | None, rows: Rows,
-                  conditions: Iterable[Condition]) -> tuple[Header | None, Rows]:
+def describe(positions: Iterable[int], header: Header | None) -> str:
+    '''Describe 0-based positions as 1-based columns, with their names if known.'''
+
+    parts = [str(i + 1) if header is None else f'{i + 1} ({header.names[i]!r})'
+             for i in positions]
+
+    if not parts:
+        return 'no columns'
+
+    return ('column ' if len(parts) == 1 else 'columns ') + ', '.join(parts)
+
+
+class Debug:
+    '''The diagnostics and warnings of --debug.
+Everything goes to stderr, so stdout stays valid CSV.  When debugging is off,
+every method returns at once, and rows pass through untouched.'''
+
+    def __init__(self, enabled: bool, prog: str) -> None:
+        self.enabled = enabled
+        self.prog = prog
+        self.counts: dict[str, int] = {}
+
+    def note(self, message: str) -> None:
+        '''Report what csvv made of an option.'''
+        if self.enabled:
+            print(f'{self.prog}: {message}', file=sys.stderr)
+
+    def warn(self, message: str) -> None:
+        '''Report questionable usage.'''
+        if self.enabled:
+            print(f'{self.prog}: warning: {message}', file=sys.stderr)
+
+    def check_name(self, label: str, resolved: Resolved) -> None:
+        '''Warn when a column name matched an item that could be a position.'''
+
+        if not resolved.by_name:
+            return
+
+        try:
+            choice = parse_choice(resolved.column.text)
+        except ValueError:
+            return
+
+        if choice is not None:
+            self.warn(f'{label} matched the column named {resolved.column.text!r}, '
+                      f'so write "#{resolved.column.text}" to mean the position')
+
+    def counting(self, rows: Rows, name: str) -> Rows:
+        '''Count the rows as they pass, under name.'''
+
+        if not self.enabled:
+            return rows
+
+        self.counts[name] = 0
+
+        def generate() -> Rows:
+            for row in rows:
+                self.counts[name] += 1
+                yield row
+
+        return generate()
+
+    def non_numbers(self, rows: Rows, checks: list[tuple[str, int]],
+                    consequence: str) -> Rows:
+        '''Count the cells that are not numbers, at each position that checks
+names, and warn about them once every row has passed.'''
+
+        if not self.enabled or not checks:
+            return rows
+
+        def generate() -> Rows:
+            tally = [0] * len(checks)
+            for row in rows:
+                for k, (_, i) in enumerate(checks):
+                    if to_number(row[i]) is None:
+                        tally[k] += 1
+                yield row
+            for (label, _), n in zip(checks, tally):
+                if n:
+                    self.warn(f'{label} met {count(n, "cell")} that '
+                              f'{"is not a number" if n == 1 else "are not numbers"}, '
+                              f'which {consequence}')
+
+        return generate()
+
+
+def keep_matching(header: Header | None, rows: Rows, conditions: Iterable[Condition],
+                  debug: Debug) -> tuple[Header | None, Rows]:
     '''Keep only the rows that pass every condition.'''
 
     width, rows = peek_width(header, rows)
@@ -472,7 +576,20 @@ def keep_matching(header: Header | None, rows: Rows,
     if width is None:
         return header, rows
 
-    tests = [(c, resolve_one(c.column, header, width)) for c in conditions]
+    tests: list[tuple[Condition, int]] = []
+
+    for c in conditions:
+        label = f'-e {c.text!r}'
+        resolved = resolve_one(c.column, header, width)
+        debug.check_name(label, resolved)
+        mode = ('a regex search' if c.regex is not None else
+                'comparing numbers' if c.number is not None else 'comparing text')
+        value = c.value if c.number is not None else repr(c.value)
+        debug.note(f'{label}: {describe(resolved.positions, header)} {c.op} {value}, {mode}')
+        tests.append((c, resolved.positions[0]))
+
+    rows = debug.non_numbers(rows, [(f'-e {c.text!r}', i) for c, i in tests
+                                    if c.number is not None], 'failed the test')
 
     return header, (row for row in rows if all(c.matches(row[i]) for c, i in tests))
 
@@ -492,8 +609,8 @@ number from ever being compared with text.'''
     return Descending(cell) if reverse else cell
 
 
-def sort_rows(header: Header | None, rows: Rows,
-              keys: Iterable[SortKey]) -> tuple[Header | None, Rows]:
+def sort_rows(header: Header | None, rows: Rows, keys: Iterable[SortKey],
+              debug: Debug) -> tuple[Header | None, Rows]:
     '''Sort the rows by the keys, the first key taking priority.
 A slice stands for one key per column, all with the same flags.  The sort is
 stable, and it holds every row in memory.'''
@@ -504,12 +621,22 @@ stable, and it holds every row in memory.'''
         return header, rows
 
     parts: list[tuple[int, bool, bool]] = []
+    numeric_checks: list[tuple[str, int]] = []
 
     for key in keys:
-        positions = resolve((key.column,), header, width)
-        if not positions:
-            raise out_of_range(key.column, width)
-        parts.extend((i, key.numeric, key.reverse) for i in positions)
+        label = f'--sort {key.text!r}'
+        resolved = resolve_some(key.column, header, width)
+        debug.check_name(label, resolved)
+        debug.note(f'{label}: {describe(resolved.positions, header)}, '
+                   f'{"as numbers" if key.numeric else "as text"}'
+                   f'{", reversed" if key.reverse else ""}')
+        parts.extend((i, key.numeric, key.reverse) for i in resolved.positions)
+        if key.numeric:
+            numeric_checks.extend((label, i) for i in resolved.positions)
+
+    debug.note('sorting holds every row in memory')
+
+    rows = debug.non_numbers(rows, numeric_checks, 'sorted after the numbers')
 
     def row_key(row: Row) -> tuple[Any, ...]:
         return tuple(cell_key(row[i], numeric, reverse) for i, numeric, reverse in parts)
@@ -517,8 +644,8 @@ stable, and it holds every row in memory.'''
     return header, iter(sorted(rows, key=row_key))
 
 
-def select(header: Header | None, rows: Rows,
-           columns: Iterable[Column]) -> tuple[Header | None, Rows]:
+def select(header: Header | None, rows: Rows, columns: Iterable[Column],
+           debug: Debug) -> tuple[Header | None, Rows]:
     '''Keep only the named columns, in the order named.'''
 
     width, rows = peek_width(header, rows)
@@ -526,7 +653,18 @@ def select(header: Header | None, rows: Rows,
     if width is None:
         return header, rows
 
-    positions = resolve(columns, header, width)
+    positions: list[int] = []
+
+    for column in columns:
+        label = f'--select {column.text!r}'
+        resolved = resolve_column(column, header, width)
+        debug.check_name(label, resolved)
+        if resolved.positions:
+            debug.note(f'{label}: {describe(resolved.positions, header)}')
+        else:
+            debug.warn(f'{label} was ignored, since the input has '
+                       f'{count(width, "column")}')
+        positions.extend(resolved.positions)
 
     if header is not None:
         header = Header(tuple(header.names[i] for i in positions))
@@ -628,6 +766,9 @@ def make_parser() -> argparse.ArgumentParser:
 
     parser.add_argument('-V', '--version', action='version', version='\n'.join(version_lines))
 
+    parser.add_argument('--debug', action='store_true',
+            help='print diagnostics and warnings to stderr')
+
     parser.add_argument('-H', '--header', action='store_true',
             help='the first record holds column names')
 
@@ -656,6 +797,33 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def process(args: argparse.Namespace, selected: list[Column], stream: TextIO, source: str,
+            debug: Debug) -> None:
+    '''Filter, sort, and select the rows of stream, and write them to stdout.'''
+
+    header, rows = read(stream, args.delimiter, args.header, args.ragged, source)
+    rows = debug.counting(rows, 'read')
+
+    if args.filter:
+        header, rows = keep_matching(header, rows, args.filter, debug)
+        rows = debug.counting(rows, 'kept by the filter')
+
+    if args.sort:
+        header, rows = sort_rows(header, rows, args.sort, debug)
+
+    if selected:
+        header, rows = select(header, rows, selected, debug)
+
+    rows = debug.counting(rows, 'written')
+
+    out_delimiter = args.delimiter if args.output_delimiter is None else args.output_delimiter
+    write(sys.stdout, out_delimiter, header, rows)
+
+    if debug.counts:
+        summary = ', '.join(f'{name}: {n}' for name, n in debug.counts.items())
+        debug.note(f'rows {summary}{" (not counting the header)" if header else ""}')
+
+
 # pylint: disable=missing-function-docstring
 def main(argv: list[str] | None = None) -> int | None:
 
@@ -675,8 +843,6 @@ def main(argv: list[str] | None = None) -> int | None:
     csv.field_size_limit(FIELD_SIZE_LIMIT)
     configure_stdio()
 
-    out_delimiter = args.delimiter if args.output_delimiter is None else args.output_delimiter
-
     try:
         with contextlib.ExitStack() as stack:
             if args.FILE == '-':
@@ -687,14 +853,7 @@ def main(argv: list[str] | None = None) -> int | None:
                         errors='surrogateescape', newline=''))
                 source = args.FILE
 
-            header, rows = read(stream, args.delimiter, args.header, args.ragged, source)
-            if args.filter:
-                header, rows = keep_matching(header, rows, args.filter)
-            if args.sort:
-                header, rows = sort_rows(header, rows, args.sort)
-            if selected:
-                header, rows = select(header, rows, selected)
-            write(sys.stdout, out_delimiter, header, rows)
+            process(args, selected, stream, source, Debug(args.debug, parser.prog))
 
     except OSError as e:
         # A failed write to stdout has no file name.
