@@ -9,7 +9,6 @@ all: $(MAN)
 man: $(MAN)
 
 $(MAN): csvv
-	@command -v help2man >/dev/null || { echo 'make man: help2man is required' >&2; exit 1; }
 	help2man --no-info --locale=C.UTF-8 --name='$(MAN_NAME)' --output=$@ ./$<
 
 check: lint test
