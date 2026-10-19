@@ -887,10 +887,14 @@ def make_parser() -> argparse.ArgumentParser:
             )
 
     # help2man reads this layout.  It puts the Copyright paragraph in a
-    # COPYRIGHT section and the "Written by" one in AUTHOR, and a license line
-    # with no Copyright line before it would land at the end of EXAMPLES.
+    # COPYRIGHT section and the "Written by" one in AUTHOR.  A paragraph that
+    # starts no section stays in the one before it, so the License paragraph
+    # lands in COPYRIGHT on a line of its own.  Without the blank line,
+    # help2man would join it to the Copyright line.  With no Copyright
+    # paragraph before it, it would land at the end of EXAMPLES.
     version_lines = (f'%(prog)s {__version__}',
                     f'Copyright {__author__}',
+                    '',
                     f'License: {__license__}',
                     '',
                     f'Written by {__author__}')

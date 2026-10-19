@@ -214,7 +214,7 @@ def test_version(run: Run) -> None:
     assert result.returncode == 0
     lines = result.stdout.decode().splitlines()
     assert lines[0].startswith('csvv 20')
-    assert lines[1:] == ['Copyright Steven Ward', 'License: MPL-2.0', '',
+    assert lines[1:] == ['Copyright Steven Ward', '', 'License: MPL-2.0', '',
                          'Written by Steven Ward']
 
 
