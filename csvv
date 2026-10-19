@@ -273,8 +273,11 @@ never a valid position, endpoint, or step.'''
             raise ValueError('columns are numbered from 1, so 0 is not a position')
         return position
 
-    if 0 in numbers:
+    if 0 in numbers[:2]:
         raise ValueError('columns are numbered from 1, so a slice may not use 0')
+
+    if len(numbers) == 3 and numbers[2] == 0:
+        raise ValueError('a slice may not have a step of 0')
 
     return slice(*numbers)
 

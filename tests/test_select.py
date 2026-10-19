@@ -59,9 +59,15 @@ def test_out_of_range(csvv: types.ModuleType, text: str, expected: list[int]) ->
     assert positions(csvv, text) == expected
 
 
-@pytest.mark.parametrize('text', ['0', '0:3', '1:0', '::0'])
+@pytest.mark.parametrize('text', ['0', '0:3', '1:0', '0:3:0'])
 def test_zero_is_an_error(csvv: types.ModuleType, text: str) -> None:
     with pytest.raises(csvv.DataError, match='numbered from 1'):
+        positions(csvv, text)
+
+
+@pytest.mark.parametrize('text', ['::0', '1:3:0'])
+def test_zero_step_is_an_error(csvv: types.ModuleType, text: str) -> None:
+    with pytest.raises(csvv.DataError, match='step of 0'):
         positions(csvv, text)
 
 
