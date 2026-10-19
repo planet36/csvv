@@ -254,6 +254,23 @@ def test_failed_write_is_reported_once(tmp_path, lines: int) -> None:
     assert result.stderr == b'csvv: No space left on device\n'
 
 
+def test_closed_stdin_is_an_error() -> None:
+    result = subprocess.run([sys.executable, str(CSVV)], capture_output=True, check=False,
+                            preexec_fn=lambda: os.close(0))  # pylint: disable=subprocess-popen-preexec-fn
+    assert result.returncode == 1
+    assert result.stdout == b''
+    assert result.stderr == f'csvv: stdin: {os.strerror(errno.EBADF)}\n'.encode()
+
+
+def test_closed_stdout_is_an_error(tmp_path) -> None:
+    path = tmp_path / 'in.csv'
+    path.write_bytes(b'a,b\n')
+    result = subprocess.run([sys.executable, str(CSVV), str(path)], stderr=subprocess.PIPE,
+                            check=False, preexec_fn=lambda: os.close(1))  # pylint: disable=subprocess-popen-preexec-fn
+    assert result.returncode == 1
+    assert result.stderr == f'csvv: stdout: {os.strerror(errno.EBADF)}\n'.encode()
+
+
 def test_interrupt_exits_quietly(csvv: types.ModuleType, monkeypatch) -> None:
     def interrupted(*_args: object) -> None:
         raise KeyboardInterrupt

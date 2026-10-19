@@ -17,6 +17,7 @@ import argparse
 import contextlib
 import csv
 import dataclasses
+import errno
 import io
 import itertools
 import math
@@ -1025,7 +1026,13 @@ def main(argv: list[str] | None = None) -> int | None:
 
     try:
         with contextlib.ExitStack() as stack:
+            # A stream closed at startup is None, as configure_stdio() says.
+            if sys.stdout is None:
+                raise OSError(errno.EBADF, os.strerror(errno.EBADF), 'stdout')
+
             if options.file == '-':
+                if sys.stdin is None:
+                    raise OSError(errno.EBADF, os.strerror(errno.EBADF), 'stdin')
                 stream: TextIO = sys.stdin
                 source = 'stdin'
             else:
