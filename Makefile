@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: MPL-2.0
 
 MAN = csvv.1
+# The first line of the --help description, lowercase and with no period.
 MAN_NAME = filter and sort the rows of a CSV file, and select its columns
 
 all: test
 
 man: $(MAN)
 
-$(MAN): csvv
+$(MAN): csvv Makefile
 	help2man --no-info --locale=C.UTF-8 --name='$(MAN_NAME)' --output=$@ ./$<
 
 check: lint test
@@ -20,6 +21,7 @@ lint:
 	ruff check csvv tests
 	pylint csvv tests/*.py
 	mypy --ignore-missing-imports csvv
+	mypy --ignore-missing-imports tests
 
 clean:
 	@$(RM) --recursive -- \
