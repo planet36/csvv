@@ -251,7 +251,7 @@ def test_failed_write_is_reported_once(tmp_path, lines: int) -> None:
         result = subprocess.run([sys.executable, str(CSVV), str(path)], stdout=full,
                                 stderr=subprocess.PIPE, check=False)
     assert result.returncode == 1
-    assert result.stderr == b'csvv: No space left on device\n'
+    assert result.stderr == b'csvv: stdout: No space left on device\n'
 
 
 def test_closed_stdin_is_an_error() -> None:

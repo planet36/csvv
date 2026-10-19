@@ -1056,7 +1056,7 @@ def main(argv: list[str] | None = None) -> int | None:
             # exit cannot fail a second time.
             with contextlib.suppress(OSError, ValueError):
                 os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-            where = ''
+            where = 'stdout: '
         else:
             where = f'{e.filename}: '
         print(f'{parser.prog}: {where}{e.strerror or e}', file=sys.stderr)
