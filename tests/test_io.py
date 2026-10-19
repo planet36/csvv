@@ -194,10 +194,10 @@ def test_output_delimiter_converts(run: Run) -> None:
 def test_tab_escape(run: Run) -> None:
     result = run('-o', r'\t', stdin=b'a,b\n"x\ty",2\n')
     assert result.stdout == b'a\tb\n"x\ty"\t2\n'
-    assert run('-F', r'\t', stdin=b'a\tb\n').stdout == b'a\tb\n'
+    assert run('-F', r'\t', '-o', ',', stdin=b'a\tb\n').stdout == b'a,b\n'
 
 
-@pytest.mark.parametrize('value', ['ab', '', '"', '\n'])
+@pytest.mark.parametrize('value', ['ab', '', '"', '\n', '\r'])
 def test_bad_delimiter_is_a_usage_error(run: Run, value: str) -> None:
     for option in ('-F', '-o'):
         result = run(option, value)
@@ -269,6 +269,14 @@ def test_closed_stdout_is_an_error(tmp_path) -> None:
                             check=False, preexec_fn=lambda: os.close(1))  # pylint: disable=subprocess-popen-preexec-fn
     assert result.returncode == 1
     assert result.stderr == f'csvv: stdout: {os.strerror(errno.EBADF)}\n'.encode()
+
+
+def test_closed_stdin_is_fine_with_a_file(tmp_path) -> None:
+    path = tmp_path / 'in.csv'
+    path.write_bytes(b'a,b\n')
+    result = subprocess.run([sys.executable, str(CSVV), str(path)], capture_output=True,
+                            check=False, preexec_fn=lambda: os.close(0))  # pylint: disable=subprocess-popen-preexec-fn
+    assert (result.returncode, result.stdout) == (0, b'a,b\n')
 
 
 def test_interrupt_exits_quietly(csvv: types.ModuleType, monkeypatch) -> None:

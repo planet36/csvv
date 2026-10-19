@@ -114,7 +114,7 @@ def test_select_by_position(run: Run) -> None:
     assert result.stdout == b'c,a\n3,1\n'
 
 
-def test_select_negative_needs_equals(run: Run) -> None:
+def test_select_value_starting_with_a_dash(run: Run) -> None:
     assert run('--select=-1', stdin=b'a,b\n1,2\n').stdout == b'b\n2\n'
     assert run('--select=-2:', stdin=b'a,b,c\n').stdout == b'b,c\n'
 

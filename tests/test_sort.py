@@ -10,54 +10,34 @@ import pytest
 from conftest import Run
 
 
-@pytest.mark.parametrize(('text', 'column', 'numeric', 'reverse'), [
-    ('median', 'median', False, False),
-    ('median:n', 'median', True, False),
-    ('median:r', 'median', False, True),
-    ('median:nr', 'median', True, True),
-    ('median:rn', 'median', True, True),
-    ('2', '2', False, False),
-    ('2:n', '2', True, False),
-    ('2:4', '2:4', False, False),
-    ('2:4:n', '2:4', True, False),
-    ('5:2:-1', '5:2:-1', False, False),
-    ('5:2:-1:r', '5:2:-1', False, True),
-    ('2:', '2:', False, False),
-    ('-2:', '-2:', False, False),
-    ('2::', '2::', False, False),
-    ('2::n', '2:', True, False),
-    ('::-1', '::-1', False, False),
-    ('a:n:', 'a:n:', False, False),
-    ('a:n', 'a', True, False),
-    ('a:x', 'a:x', False, False),
-    ('n', 'n', False, False),
-    ('#3:n', '#3', True, False),
-])
-def test_key_parsing(csvv: types.ModuleType, text: str, column: str, numeric: bool,
-                     reverse: bool) -> None:
-    key = csvv.sort_key(text)
-    assert (key.column.text, key.numeric, key.reverse) == (column, numeric, reverse)
-
-
-@pytest.mark.parametrize(('text', 'column', 'reverse'), [
-    ('file:v', 'file', False),
-    ('file:vr', 'file', True),
-    ('file:rv', 'file', True),
-    ('2:4:v', '2:4', False),
-    ('a:v:', None, False),
-])
-def test_natural_key_parsing(csvv: types.ModuleType, text: str, column: str | None,
-                             reverse: bool) -> None:
-    key = csvv.sort_key(text)
-    if column is None:
-        assert (key.column.text, key.natural) == (text, False)
-    else:
-        assert (key.column.text, key.numeric, key.natural, key.reverse) == (
-            column, False, True, reverse)
-
-
 # The fields are the column, numeric, natural, ignore_case, and reverse.
 @pytest.mark.parametrize(('text', 'fields'), [
+    ('median', ('median', False, False, False, False)),
+    ('median:n', ('median', True, False, False, False)),
+    ('median:r', ('median', False, False, False, True)),
+    ('median:nr', ('median', True, False, False, True)),
+    ('median:rn', ('median', True, False, False, True)),
+    ('2', ('2', False, False, False, False)),
+    ('2:n', ('2', True, False, False, False)),
+    ('2:4', ('2:4', False, False, False, False)),
+    ('2:4:n', ('2:4', True, False, False, False)),
+    ('5:2:-1', ('5:2:-1', False, False, False, False)),
+    ('5:2:-1:r', ('5:2:-1', False, False, False, True)),
+    ('2:', ('2:', False, False, False, False)),
+    ('-2:', ('-2:', False, False, False, False)),
+    ('2::', ('2::', False, False, False, False)),
+    ('2::n', ('2:', True, False, False, False)),
+    ('::-1', ('::-1', False, False, False, False)),
+    ('a:n:', ('a:n:', False, False, False, False)),
+    ('a:n', ('a', True, False, False, False)),
+    ('a:x', ('a:x', False, False, False, False)),
+    ('n', ('n', False, False, False, False)),
+    ('#3:n', ('#3', True, False, False, False)),
+    ('file:v', ('file', False, True, False, False)),
+    ('file:vr', ('file', False, True, False, True)),
+    ('file:rv', ('file', False, True, False, True)),
+    ('2:4:v', ('2:4', False, True, False, False)),
+    ('a:v:', ('a:v:', False, False, False, False)),
     ('name:i', ('name', False, False, True, False)),
     ('name:ir', ('name', False, False, True, True)),
     ('name:vi', ('name', False, True, True, False)),
@@ -66,8 +46,8 @@ def test_natural_key_parsing(csvv: types.ModuleType, text: str, column: str | No
     ('2:4:i', ('2:4', False, False, True, False)),
     ('a:i:', ('a:i:', False, False, False, False)),
 ])
-def test_ignore_case_key_parsing(csvv: types.ModuleType, text: str,
-                                 fields: tuple[str, bool, bool, bool, bool]) -> None:
+def test_key_parsing(csvv: types.ModuleType, text: str,
+                     fields: tuple[str, bool, bool, bool, bool]) -> None:
     key = csvv.sort_key(text)
     assert (key.column.text, key.numeric, key.natural, key.ignore_case, key.reverse) == fields
 
@@ -307,7 +287,8 @@ def test_bad_column_is_a_data_error(run: Run, key: str, message: bytes) -> None:
     ('-e', '2>5', '--select', '1', '-e', '#9<1'),
 ])
 def test_column_errors_do_not_depend_on_the_data(run: Run, args: tuple[str, ...]) -> None:
-    # The filter drops every row, so no row ever reaches the bad column.
+    # With the first input the filter drops every row, and with the second it
+    # keeps one.  The error must come either way.
     for data in (b'a,1\n', b'a,9\n'):
         result = run(*args, stdin=data)
         assert result.returncode == 1

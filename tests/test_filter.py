@@ -22,6 +22,7 @@ from conftest import Run
     ('inf', float('inf')),
     ('-Infinity', float('-inf')),
     ('9007199254740993', 9007199254740993),
+    ('9' * 4301, float('inf')),
 ])
 def test_numbers(csvv: types.ModuleType, text: str, expected: float) -> None:
     n = csvv.to_number(text)
@@ -33,10 +34,6 @@ def test_numbers(csvv: types.ModuleType, text: str, expected: float) -> None:
                                   'five', '1 2', '½', '١٢', '１２', '1٢', '\u00a05'])
 def test_not_numbers(csvv: types.ModuleType, text: str) -> None:
     assert csvv.to_number(text) is None
-
-
-def test_long_integers_compare_exactly(csvv: types.ModuleType) -> None:
-    assert csvv.to_number('9007199254740993') != csvv.to_number('9007199254740992')
 
 
 @pytest.mark.parametrize(('text', 'column', 'op', 'value'), [
@@ -192,7 +189,7 @@ def test_bad_filter_without_header_is_a_usage_error(run: Run, expr: str,
     ('5:<1', b'out of range'),
 ])
 def test_bad_filter_column_is_a_data_error(run: Run, expr: str, message: bytes) -> None:
-    result = run('-H', '-e', expr, stdin=DATA)
+    result = run('-H', f'-e={expr}', stdin=DATA)
     assert (result.returncode, result.stdout) == (1, b'')
     assert message in result.stderr
 
