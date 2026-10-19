@@ -39,7 +39,7 @@ type Choice = int | slice
 
 type Number = int | float
 
-# The csv module's default of 131072 bytes rejects larger fields.
+# The csv module's default of 131072 characters rejects larger fields.
 # sys.maxsize would overflow a C long on Windows.
 FIELD_SIZE_LIMIT = 2**31 - 1
 
