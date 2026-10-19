@@ -57,11 +57,11 @@ csvv reads FILE, or stdin when FILE is absent or `-`, and writes CSV to stdout.
 | --- | --- |
 | `-H, --header` | the first record holds column names |
 | `-F, --delimiter CHAR` | the input field separator (default `,`) |
-| `-o, --output-delimiter CHAR` | the output field separator (default: the input separator) |
-| `--ragged MODE` | handle a record whose length differs from the first: `error` (the default), `pad`, or `truncate` |
+| `-o, --output-delimiter CHAR` | the output field separator (default: as `-F`) |
+| `--ragged MODE` | handle a record whose length differs from the first: `error` (the default), `pad` a short one with empty fields, or `truncate` a long one |
 | `-e, --filter EXPR` | keep only rows matching EXPR (repeatable) |
 | `--sort KEY` | sort rows by KEY (repeatable) |
-| `--select LIST` | output only the columns in LIST, in that order (repeatable) |
+| `--select LIST` | output the columns in LIST, in that order (repeatable) |
 | `--select-regex REGEX` | output the columns whose names match REGEX (repeatable) |
 | `--debug` | print diagnostics and warnings to stderr |
 | `-h, --help` | show the help and exit |
@@ -80,7 +80,7 @@ A column is named by its position, by a slice, or with `-H` by its name in the h
 - **A name that occurs twice in the header is an error**, never a silent pick.  Name such a column by position.
 - **0 is never a position**, so `0`, or a slice with an endpoint or step of 0, is an error.
 
-Join a value that starts with `-` to its option with `=`, as in `--select=-2:`, and likewise for `-e` and `--sort`.  Otherwise argparse may read it as an option.
+Join a value that starts with `-` to its option with `=`, as in `--select=-2:`, and likewise for `-e`, `--sort`, and `--select-regex`.  Otherwise argparse may read it as an option.
 
 `--select-regex REGEX` selects every column whose name REGEX is found in, in header order.  It needs `-H`, and a regex that matches no column name is an error, as an unknown name is.  It joins `--select` in the order the options are given, so a pattern can pick out columns whose exact names differ from file to file:
 

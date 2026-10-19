@@ -813,7 +813,7 @@ def make_parser() -> argparse.ArgumentParser:
 
     description_lines = (
             'Filter and sort the rows of a CSV file, and select its columns.',
-            'csvv filters first, then sorts, then selects, whatever order the options are in.',
+            'csvv filters, then sorts, then selects, whatever order the options are in.',
             'Read FILE, or stdin when FILE is absent or "-", and write CSV to stdout.',
             )
 
@@ -824,7 +824,8 @@ def make_parser() -> argparse.ArgumentParser:
             'With -H, the header is written first.',
             'Pipe the output to "tail -n +2" to drop it,',
             'unless a quoted header field spans lines.',
-            'Every record must have as many fields as the first, unless --ragged says otherwise.',
+            'Every record must be as long as the first, unless --ragged says otherwise.',
+            'Values are written as they were read, though quoting may change.',
             '',
             'A column is named by its position, by a slice, or with -H by its name.',
             'Positions start at 1, and negative ones count from the end.',
@@ -837,7 +838,9 @@ def make_parser() -> argparse.ArgumentParser:
             '~ and !~ test whether the regex VALUE is found in the cell.',
             'Start the regex with (?i) to ignore case, as in name~(?i)^b.',
             'The other operators compare numbers when VALUE is a number, and text otherwise.',
-            'In a numeric test, a cell that is not a number is never equal, less, or greater.',
+            'So id==007 also matches 7.',
+            'Use id~^007$ to match exact text.',
+            'In a numeric test, a cell that is not a number passes only !=.',
             'With a slice, a row passes when any of its columns does,',
             'but != and !~ pass a row only when none of its columns has == or ~.',
             'A row must match every -e.',
@@ -845,10 +848,10 @@ def make_parser() -> argparse.ArgumentParser:
             'KEY is COL[:FLAGS], where COL is a column or a slice of columns.',
             'FLAGS holds n to compare numbers or v for natural order,',
             'i to ignore case, and r to reverse, as in median:nr.',
-            'In natural order, runs of digits compare as numbers, so file2 sorts before file10.',
-            'With i, text that differs only in case compares as written, so A sorts before a.',
-            'A slice stands for one key per column, all with the same FLAGS.',
             'Text after the last ":" is FLAGS only if it holds nothing but i, n, r, and v.',
+            'In natural order, digit runs compare as numbers, so file2 sorts before file10.',
+            'With i, text that differs only in case compares as written, so A precedes a.',
+            'A slice stands for one key per column, all with the same FLAGS.',
             'In a numeric key, cells that are not numbers sort after the numbers, as text.',
             'Text compares by code point, like LC_ALL=C sort.',
             'The sort is stable, and the first --sort takes priority.',
@@ -860,7 +863,10 @@ def make_parser() -> argparse.ArgumentParser:
             'It needs -H, and it is an error when it matches no column name.',
             '--select and --select-regex join in the order given.',
             '',
-            'Use -e=EXPR, --sort=KEY, or --select=LIST if the value starts with "-".',
+            'Use -e=EXPR, --sort=KEY, --select=LIST, or --select-regex=REGEX',
+            'if the value starts with "-".',
+            '',
+            'Exit status is 0 on success, 1 on a data or file error, and 2 on a usage error.',
             '',
             'Examples:',
             "  %(prog)s -F ';' in.csv                convert semicolon-separated input to CSV",
@@ -895,7 +901,8 @@ def make_parser() -> argparse.ArgumentParser:
             epilog='\n'.join(epilog_lines),
             formatter_class=argparse.RawTextHelpFormatter)
 
-    parser.add_argument('-V', '--version', action='version', version='\n'.join(version_lines))
+    parser.add_argument('-V', '--version', action='version', version='\n'.join(version_lines),
+            help='show the version, license, and author, and exit')
 
     parser.add_argument('-H', '--header', action='store_true',
             help='the first record holds column names')
@@ -904,11 +911,12 @@ def make_parser() -> argparse.ArgumentParser:
             help='the input field separator (default ",")')
 
     parser.add_argument('-o', '--output-delimiter', metavar='CHAR', type=separator,
-            help='the output field separator (default: the input separator)')
+            help='the output field separator (default: as -F)')
 
     parser.add_argument('--ragged', metavar='MODE', choices=RAGGED_MODES, default='error',
-            help='handle a record whose length differs from the first record:\n'
-                 'error (the default), pad with empty fields, or truncate')
+            help='handle a record whose length differs from the first:\n'
+                 'error (the default), pad a short one with empty fields,\n'
+                 'or truncate a long one')
 
     parser.add_argument('-e', '--filter', metavar='EXPR', type=condition, action='append',
             default=[], help='keep only rows matching EXPR (repeatable)')
@@ -917,7 +925,7 @@ def make_parser() -> argparse.ArgumentParser:
             default=[], help='sort rows by KEY (repeatable)')
 
     parser.add_argument('--select', metavar='LIST', type=column_list, action='append',
-            default=[], help='output only the columns in LIST, in that order (repeatable)')
+            default=[], help='output the columns in LIST, in that order (repeatable)')
 
     # The same dest as --select keeps the two in the order given.  The default
     # comes from --select, since argparse uses the first default for a dest.
