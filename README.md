@@ -32,7 +32,7 @@ csvv always filters first, then sorts, then selects, whatever order the options 
 
 ## Installation
 
-csvv needs Python 3.12 or later, and nothing else.  Copy the script somewhere on your `PATH`:
+csvv needs Python 3.12 or later, and nothing else.  It has been tested only with Python 3.14.  Copy the script somewhere on your `PATH`:
 
 ```sh
 install -m 755 csvv ~/.local/bin/
