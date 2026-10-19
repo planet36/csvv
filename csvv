@@ -162,7 +162,7 @@ stay the exact opposites of == and ~.'''
         return any(self.holds(cell) for cell in cells) != self.negated
 
     def matches(self, cell: str) -> bool:
-        '''Whether one cell passes this test.'''
+        '''Whether one cell passes this test.  Only the tests call this.'''
         return self.passes((cell,))
 
 
@@ -179,7 +179,10 @@ class SortKey:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Descending:
-    '''A sort key that sorts in reverse order.'''
+    '''A sort key that sorts in reverse order.
+sorted() needs only <.  The dataclass's == matters too: comparing key tuples
+skips equal items with ==, so without it a tie here would end the comparison
+before the next key.'''
     key: Any
 
     def __lt__(self, other: Self) -> bool:
@@ -311,7 +314,8 @@ that exist, as in Python.'''
 def resolve_column(column: Column, header: Header | None, width: int) -> Resolved:
     '''Work out which columns one item names.
 With a header, an item that exactly matches a column name refers to that column,
-even when it could also be read as a position.'''
+even when it could also be read as a position.  A name that occurs more than
+once is an error, and a "#" item is never looked up as a name.'''
 
     if header is not None and not column.forced:
         matches = header.lookup(column.text)
@@ -335,7 +339,7 @@ even when it could also be read as a position.'''
 
 
 def resolve(columns: Iterable[Column], header: Header | None, width: int) -> list[int]:
-    '''Return the 0-based positions that columns name, in order.'''
+    '''Return the 0-based positions that columns name, in order.  Only the tests call this.'''
     return [i for c in columns for i in resolve_column(c, header, width).positions]
 
 
@@ -369,7 +373,8 @@ def out_of_range(column: Column, width: int) -> DataError:
 
 
 def check_forced(column: Column) -> None:
-    '''Check a "#" item, which needs no header to be understood.'''
+    '''Raise ArgumentTypeError for a "#" item that is not a valid position or slice.
+Such an item needs no header, so it can be checked while parsing.'''
 
     if not column.forced:
         return
@@ -514,7 +519,8 @@ one for a record that holds a value.'''
 
 
 def fit_rows(records: Iterable[Record], width: int, ragged: str, source: str) -> Rows:
-    '''Yield each row, after making it width fields long as ragged allows.'''
+    '''Yield each row, after making it width fields long as ragged allows, and
+raise DataError for a row that ragged does not fix.'''
 
     for record in records:
         row = record.row
@@ -566,7 +572,7 @@ def describe(positions: Iterable[int], header: Header | None) -> str:
 class Debug:
     '''The diagnostics and warnings of --debug.
 Everything goes to stderr, so stdout stays valid CSV.  When debugging is off,
-every method returns at once, and rows pass through untouched.'''
+every method does nothing, and rows pass through untouched.'''
 
     def __init__(self, enabled: bool, prog: str) -> None:
         self.enabled = enabled
@@ -584,9 +590,9 @@ every method returns at once, and rows pass through untouched.'''
             print(f'{self.prog}: warning: {message}', file=sys.stderr)
 
     def check_name(self, label: str, resolved: Resolved) -> None:
-        '''Warn when a column name matched an item that could be a position.'''
+        '''Warn when a column name matched an item that could be a position or a slice.'''
 
-        if not resolved.by_name:
+        if not self.enabled or not resolved.by_name:
             return
 
         try:
@@ -640,7 +646,7 @@ names, and warn about them once every row has passed.'''
 def keep_matching(header: Header | None, width: int, rows: Rows,
                   conditions: Iterable[Condition], debug: Debug) -> tuple[Header | None, Rows]:
     '''Keep only the rows that pass every condition.
-A slice passes a row when any of its columns does, as Condition.passes says.'''
+How a slice passes a row is in Condition.passes.'''
 
     tests: list[tuple[Condition, list[int]]] = []
 
@@ -801,7 +807,8 @@ def configure_stdio() -> None:
     # newline='' keeps a quoted line break intact and stops '\r\n' from
     # doubling on Windows.  utf-8-sig drops a byte-order mark, which would
     # otherwise join the first column name.  surrogateescape passes invalid
-    # UTF-8 through unchanged.
+    # UTF-8 through unchanged.  A stream is None when its descriptor was
+    # closed at startup, as in "csvv in.csv <&-", and has no reconfigure().
     if isinstance(sys.stdin, io.TextIOWrapper):
         sys.stdin.reconfigure(encoding='utf-8-sig', errors='surrogateescape', newline='')
     if isinstance(sys.stdout, io.TextIOWrapper):
