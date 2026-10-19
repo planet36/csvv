@@ -1,12 +1,12 @@
 # csvv
 
-Filter, sort, and select columns of CSV files, in one dependency-free Python script.
+Filter and sort the rows of a CSV file, and select its columns, in one dependency-free Python script.
 
 csvv does a little of what `awk`, `sort`, and `cut` do, but it understands CSV.  A quoted field may hold commas, quotes, and line breaks, and csvv still reads it as one field.  With a header, columns can be named instead of counted.  Every value is written back exactly as it was read.
 
 ## Example
 
-Given `bench.csv`:
+Here is `bench.csv`:
 
 ```
 command,mean,median,runs
@@ -17,7 +17,7 @@ cksum big.iso,0.187,0.190,10
 "xxhsum -H128 big.iso",0.061,0.060,10
 ```
 
-keep the rows whose median is under 0.35, sort them from slowest to fastest, and print two columns:
+This command keeps the rows whose median is under 0.35, sorts them from slowest to fastest, and prints two columns:
 
 ```
 $ csvv -H -e 'median<0.35' --sort median:nr --select command,median bench.csv
@@ -65,9 +65,9 @@ csvv reads FILE, or stdin when FILE is absent or `-`, and writes CSV to stdout.
 | `--select-regex REGEX` | output the columns whose names match REGEX (repeatable) |
 | `--debug` | print diagnostics and warnings to stderr |
 | `-h, --help` | show the help and exit |
-| `-V, --version` | show the version and exit |
+| `-V, --version` | show the version, license, and author, and exit |
 
-CHAR is one character, or `\t` for a tab.  `csvv --help` and `man csvv` give the full details.
+CHAR is one character, or `\t` for a tab.  It may not be `"` or a line break, and a tab separator still honors CSV quoting.  `csvv --help` and `man csvv` give the full details.
 
 ### Naming columns
 
@@ -76,15 +76,22 @@ A column is named by its position, by a slice, or with `-H` by its name in the h
 - **Positions start at 1**, as in `cut` and `awk`, and negative ones count from the end, so `-1` is the last column.
 - **A slice is `START:STOP:STEP`**, as in Python, except that STOP is included, as in `cut -f2-4`.  So `2:4` is columns 2, 3, and 4, `4:` runs from column 4 to the end, and `::-1` is every column in reverse.
 - **With `-H`, an exact column name wins over a position.**  A `#` prefix forces a position, so `#3` always means the third column, even when the header has a column named `3`.
+- **A position out of range is ignored in `--select`**, but it is an error when `--select` chooses no column at all.  In `-e` and `--sort`, a column out of range is an error.
+- **A name that occurs twice in the header is an error**, never a silent pick.  Name such a column by position.
+- **0 is never a position**, so `0`, or a slice with an endpoint or step of 0, is an error.
 
-Write `--select=-1` rather than `--select -1` when the value starts with `-`, and likewise for `-e` and `--sort`.
+Join a value that starts with `-` to its option with `=`, as in `--select=-2:`, and likewise for `-e` and `--sort`.  Otherwise argparse may read it as an option.
 
 `--select-regex REGEX` selects every column whose name REGEX is found in, in header order.  It needs `-H`, and a regex that matches no column name is an error, as an unknown name is.  It joins `--select` in the order the options are given, so a pattern can pick out columns whose exact names differ from file to file:
 
 ```
-$ csvv -H --select command --select-regex '^parameter_' chunk-size.csv
-command,parameter_CHUNK-SIZE
-...
+$ csvv -H --select command --select-regex '^m' bench.csv
+command,mean,median
+sha256sum big.iso,0.412,0.405
+b2sum big.iso,0.298,0.301
+md5sum big.iso,0.351,0.349
+cksum big.iso,0.187,0.190
+xxhsum -H128 big.iso,0.061,0.060
 ```
 
 The whole value is one regex, so it may hold a comma.  A column picked by both options is output twice, as `--select 1,1` outputs column 1 twice.
@@ -110,7 +117,7 @@ md5sum big.iso,0.349
 
 ### Sorting
 
-`--sort` takes `COL[:FLAGS]`, where FLAGS holds `n` to compare numbers or `v` for natural order, `i` to ignore case, and `r` to reverse, as in `median:nr`.
+`--sort` takes `COL[:FLAGS]`, where FLAGS holds `n` to compare numbers or `v` for natural order, `i` to ignore case, and `r` to reverse, as in `median:nr`.  Text after the last `:` is FLAGS only if it holds nothing but `i`, `n`, `r`, and `v`, so `2:` is a slice.  `n` and `v` together are an error.
 
 - **The sort is stable**, and the first `--sort` takes priority over the next.
 - **A slice stands for one key per column**, so `--sort 2:4:n` sorts by column 2, then 3, then 4, all as numbers.
@@ -154,15 +161,15 @@ csvv: rows read: 5, kept by the filter: 4, written: 4 (not counting the header)
 ## Behavior worth knowing
 
 - **Values are never rewritten.**  csvv converts a value only to compare it, so `007`, `1e5`, and `0.037180646437500006` come out byte for byte.  Quoting can change, though: a needlessly quoted field is written without quotes.
-- **With `-H`, the header is written first**, even when no row passes the filter.  Pipe the output to `tail -n +2` to drop it.
-- **Malformed quoting is an error**, as in `"quoted" word`, rather than being silently repaired.  Error messages name the record and the line where it starts.
-- **Every record must be as long as the first**, unless `--ragged` says to pad or truncate it.  Blank lines are skipped.
+- **With `-H`, the header is written first**, even when no row passes the filter.  Pipe the output to `tail -n +2` to drop it, unless a quoted header field spans lines.
+- **Malformed quoting is an error**, as in `"quoted" word`, rather than being silently repaired.  Error messages name the file, the record, and the line where that record starts.
+- **Every record must be as long as the first.**  `--ragged pad` fills out a short record with empty fields, and `--ragged truncate` cuts a long one, but each still rejects the other kind.  Blank lines are skipped.
 - **Input is UTF-8**, and a byte-order mark is dropped.  Bytes that are not valid UTF-8 pass through unchanged.  Output lines end with `\n`.
 - **The exit status** is 0 on success, 1 on a data or file error, 2 on a usage error, and 130 on Ctrl-C.  A filter that keeps no rows still exits 0, unlike `grep`.
 
 ## Development
 
-`make check` runs ruff, pylint, and mypy, then the pytest tests.  The tool itself needs nothing beyond the standard library.  The tests and the checks need pytest, ruff, pylint, and mypy.
+The tool itself needs only the standard library.  `make check` runs ruff, pylint, and mypy, then the tests with pytest, so it needs all four.
 
 ## License
 
