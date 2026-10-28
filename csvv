@@ -40,7 +40,7 @@ type Choice = int | slice
 
 type Number = int | float
 
-# The csv module's default of 131072 characters rejects larger fields.
+# The csv module's default of 131,072 characters rejects larger fields.
 # sys.maxsize would overflow a C long on Windows.
 FIELD_SIZE_LIMIT = 2**31 - 1
 
@@ -141,7 +141,7 @@ class Condition:
         return self.op in NEGATIONS
 
     def holds(self, cell: str) -> bool:
-        '''Whether cell passes the test, with == in place of != and ~ in place of !~.
+        '''Return whether cell passes the test, with == in place of != and ~ in place of !~.
 In a numeric test, a cell that is not a number is never equal, less, or greater.'''
 
         if self.regex is not None:
@@ -156,14 +156,14 @@ In a numeric test, a cell that is not a number is never equal, less, or greater.
         return COMPARISONS[op](cell, self.value)
 
     def passes(self, cells: Iterable[str]) -> bool:
-        '''Whether a row passes, given its cells in the columns that COL names.
+        '''Return whether a row passes, given its cells in the columns that COL names.
 A row passes when any of the cells holds.  A negated operator turns that
 around, so != and !~ pass a row only when none of the cells has == or ~, and
 stay the exact opposites of == and ~.'''
         return any(self.holds(cell) for cell in cells) != self.negated
 
     def matches(self, cell: str) -> bool:
-        '''Whether one cell passes this test.  Only the tests call this.'''
+        '''Return whether one cell passes this test.  Only the tests call this.'''
         return self.passes((cell,))
 
 

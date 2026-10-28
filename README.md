@@ -177,4 +177,4 @@ csvv is licensed under the Mozilla Public License 2.0 (MPL-2.0).
 
 ## The name
 
-csvv began as "CSV viewer."  The initial plan had eleven subcommands, one of which, `view`, showed CSV as an aligned table.  As the design took shape, csvv narrowed to the three jobs no standard command does with CSV: filtering, sorting, and selecting columns by name.  The name stayed.  If the second v needs a meaning, read it as the verb *vet*, as in vetting candidates: to examine carefully and keep only what passes.
+csvv began as "CSV viewer".  The initial plan had eleven subcommands, one of which, `view`, showed CSV as an aligned table.  As the design took shape, csvv narrowed to the three jobs no standard command does with CSV: filtering, sorting, and selecting columns by name.  The name stayed.  If the second v needs a meaning, read it as the verb *vet*, as in vetting candidates: to examine carefully and keep only what passes.
