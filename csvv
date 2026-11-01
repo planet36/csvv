@@ -408,8 +408,8 @@ def column_list(s: str) -> list[Column]:
 
 def name_pattern(s: str) -> list[NamePattern]:
     '''Compile s as a --select-regex.
-Return a list of one item, as column_list() does, since both options append to
-one list.'''
+Return a list of one item, since main() flattens the values of --select and
+--select-regex, which share a dest, and each value must therefore be a list.'''
 
     try:
         regex = re.compile(s)
