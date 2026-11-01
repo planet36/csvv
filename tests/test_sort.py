@@ -287,8 +287,8 @@ def test_bad_column_is_a_data_error(run: Run, key: str, message: bytes) -> None:
     ('-e', '2>5', '--select', '1', '-e', '#9<1'),
 ])
 def test_column_errors_do_not_depend_on_the_data(run: Run, args: tuple[str, ...]) -> None:
-    # With the first input the filter drops every row, and with the second it
-    # keeps one.  The error must come either way.
+    # With the first input, the filter drops every row, and with the second,
+    # it keeps one.  The error must come either way.
     for data in (b'a,1\n', b'a,9\n'):
         result = run(*args, stdin=data)
         assert result.returncode == 1

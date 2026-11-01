@@ -67,7 +67,7 @@ csvv reads FILE, or stdin when FILE is absent or `-`, and writes CSV to stdout.
 | `-h, --help` | show the help and exit |
 | `-V, --version` | show the version, license, and author, and exit |
 
-CHAR is one character, or `\t` for a tab.  It may not be `"` or a line break, and a tab separator still honors CSV quoting.  `csvv --help` and `man csvv` give the full details.
+CHAR is one character, or `\t` for a tab.  It may not be `"` or a line break.  A tab separator still honors CSV quoting.  `csvv --help` and `man csvv` give the full details.
 
 ### Naming columns
 
@@ -160,7 +160,7 @@ csvv: rows read: 5, kept by the filter: 4, written: 4 (not counting the header)
 
 ## Behavior worth knowing
 
-- **Values are never rewritten.**  csvv converts a value only to compare it, so `007`, `1e5`, and `0.037180646437500006` come out byte for byte.  Quoting can change, though: a needlessly quoted field is written without quotes.
+- **Values are never rewritten.**  csvv converts a value only to compare it, so `007`, `1e5`, and `0.037180646437500006` come out byte for byte.  Quoting can change, though.  A needlessly quoted field is written without quotes.
 - **With `-H`, the header is written first**, even when no row passes the filter.  Pipe the output to `tail -n +2` to drop it, unless a quoted header field spans lines.
 - **Malformed quoting is an error**, as in `"quoted" word`, rather than being silently repaired.  Error messages name the file, the record, and the line where that record starts.
 - **Every record must be as long as the first.**  `--ragged pad` fills out a short record with empty fields, and `--ragged truncate` cuts a long one, but each still rejects the other kind.  Blank lines are skipped.
@@ -177,4 +177,4 @@ csvv is licensed under the Mozilla Public License 2.0 (MPL-2.0).
 
 ## The name
 
-csvv began as "CSV viewer".  The initial plan had eleven subcommands, one of which, `view`, showed CSV as an aligned table.  As the design took shape, csvv narrowed to the three jobs no standard command does with CSV: filtering, sorting, and selecting columns by name.  The name stayed.  If the second v needs a meaning, read it as the verb *vet*, as in vetting candidates: to examine carefully and keep only what passes.
+csvv began as "CSV viewer".  The initial plan had eleven subcommands, one of which, `view`, showed CSV as an aligned table.  As the design took shape, csvv narrowed to the three jobs no standard command does with CSV: filtering, sorting, and selecting columns by name.  The name stayed.  If the second v needs a meaning, read it as the verb *vet*, as in vetting candidates, which means to examine carefully and keep only what passes.

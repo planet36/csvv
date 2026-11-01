@@ -62,7 +62,8 @@ REGEX_OPERATORS = ('~', '!~')
 # Each negated operator and the operator it is the exact opposite of.
 NEGATIONS = {'!=': '==', '!~': '~'}
 
-# Only ASCII digits, as for numbers.  The group makes re.split() keep the runs.
+# This matches only ASCII digits, as for numbers.  The group makes re.split()
+# keep the runs.
 DIGIT_RUN = re.compile('([0-9]+)')
 
 # Two-character operators come first, so that the longest one wins where
@@ -183,7 +184,7 @@ class SortKey:
 @dataclasses.dataclass(frozen=True, slots=True)
 class Descending:
     '''A sort key that sorts in reverse order.
-sorted() needs only <.  The dataclass's == matters too: comparing key tuples
+sorted() needs only <.  The dataclass's == matters too.  Comparing key tuples
 skips equal items with ==, so without it a tie here would end the comparison
 before the next key.'''
     key: Any
