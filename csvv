@@ -877,8 +877,6 @@ def make_parser() -> argparse.ArgumentParser:
             'Use -e=EXPR, --sort=KEY, --select=LIST, or --select-regex=REGEX',
             'if the value starts with "-".',
             '',
-            'Exit status is 0 on success, 1 on a data or file error, and 2 on a usage error.',
-            '',
             'Examples:',
             "  %(prog)s -F ';' in.csv                convert semicolon-separated input to CSV",
             r"  %(prog)s -o '\t' in.csv | column -t -s $'\t'",
