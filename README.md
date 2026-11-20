@@ -32,17 +32,26 @@ csvv always filters first, then sorts, then selects, whatever order the options 
 
 ## Installation
 
-csvv needs Python 3.12 or later, and nothing else.  It has been tested only with Python 3.14.  Copy the script somewhere on your `PATH`:
+csvv needs Python 3.12 or later, and nothing else.  It has been tested only with Python 3.14.
 
-```sh
-install -m 755 csvv ~/.local/bin/
-```
-
-To build the man page, which needs [help2man](https://www.gnu.org/software/help2man/), run `make man` and install `csvv.1`:
+`make install` installs the script and its man page under `/usr/local`.  It builds the man page first, which needs [help2man](https://www.gnu.org/software/help2man/).  Run `make man` before `sudo make install`, so that `csvv.1` is built as you rather than as root:
 
 ```sh
 make man
-install -m 644 csvv.1 ~/.local/share/man/man1/
+sudo make install
+```
+
+Set `PREFIX` to install somewhere else, such as your home directory.  `make` also reads `PREFIX` from the environment.  `BINDIR` and `MAN1DIR` set the two install directories one at a time, and `DESTDIR` stages the whole install under another root, as a package build does.  `make uninstall` removes both files and takes the same variables:
+
+```sh
+make install PREFIX="$HOME/.local"
+make uninstall PREFIX="$HOME/.local"
+```
+
+Without help2man, copy the script somewhere on your `PATH` instead:
+
+```sh
+install -m 755 csvv ~/.local/bin/
 ```
 
 ## Usage
